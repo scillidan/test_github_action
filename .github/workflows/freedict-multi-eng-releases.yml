@@ -308,15 +308,15 @@ jobs:
   create-combined-release:
     needs: [discover-dictionaries, process-all-dictionaries]
     runs-on: ubuntu-latest
+    if: ${{ !failure() && !cancelled() && (needs.process-all-dictionaries.result == 'success') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
+  
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y zip
-
       - name: Get current date for release tag
         id: date
         run: |
@@ -324,19 +324,17 @@ jobs:
           current_date=$(date -u +"%Y%m%d")
           echo "RELEASE_DATE=$current_date" >> $GITHUB_OUTPUT
           echo "Release will be tagged as: $current_date"
-
       - name: Download processed dictionaries
         uses: actions/download-artifact@v4
         with:
           name: processed-dictionaries
           path: processed-dictionaries
-
+  
       - name: Create collection ZIP files
         run: |
           mkdir -p collections
           cp processed-dictionaries/* collections/ 2>/dev/null || true
           cd collections
-
           zip -j all-stardict.zip *stardict.zip
           zip -j all-sdcv.zip *sdcv.zip
           zip -j all-dictd.zip *dictd.zip
@@ -344,7 +342,6 @@ jobs:
           zip -j all-aard2.zip *.slob
           zip -j _all-formatted-txt.zip _*formatted.txt
           zip -j _all-formatted-html2ansi-txt.zip _*formatted-html2ansi.txt
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
