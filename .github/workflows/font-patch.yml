@@ -1,0 +1,86 @@
+name: Font Patch Workflow
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  font_patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install required packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full zip tar
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pyzipper py7zr jq fonttools
+      - name: Fetch Latest Monaspace Release
+        id: monaspace
+        run: |
+          LATEST=$(curl -s https://api.github.com/repos/githubnext/Monaspace/releases/latest | jq -r .tag_name)
+          echo "Latest Monaspace version: $LATEST"
+          ZIP_FILE="monaspace-${LATEST}.zip"
+          curl -L -o $ZIP_FILE "https://github.com/githubnext/Monaspace/releases/download/$LATEST/$ZIP_FILE"
+          echo "::set-output name=zip_file::$ZIP_FILE"
+          echo "::set-output name=version::$LATEST"
+      - name: Fetch Latest Sarasa Gothic Release
+        id: sarasa
+        run: |
+          LATEST=$(curl -s https://api.github.com/repos/be5invis/Sarasa-Gothic/releases/latest | jq -r .tag_name)
+          echo "Latest Sarasa Gothic version: $LATEST"
+          VERSION=${LATEST#v}
+          curl -L -o "SarasaGothicSC-TTF-Unhinted-${VERSION}.7z" "https://github.com/be5invis/Sarasa-Gothic/releases/download/$LATEST/SarasaGothicSC-TTF-Unhinted-${VERSION}.7z"
+          curl -L -o "SarasaGothicTC-TTF-Unhinted-${VERSION}.7z" "https://github.com/be5invis/Sarasa-Gothic/releases/download/$LATEST/SarasaGothicTC-TTF-Unhinted-${VERSION}.7z"
+          echo "::set-output name=version::$VERSION"
+      - name: Decompress Monaspace Font
+        run: |
+          unzip -o "${{ steps.monaspace.outputs.zip_file }}" -d MonaspaceAr
+          rm -f "${{ steps.monaspace.outputs.zip_file }}"
+      - name: Decompress Sarasa Gothic Fonts
+        run: |
+          7z x "SarasaGothicSC-TTF-Unhinted-${{ steps.sarasa.outputs.version }}.7z" -oSarasaGothicSC
+          7z x "SarasaGothicTC-TTF-Unhinted-${{ steps.sarasa.outputs.version }}.7z" -oSarasaGothicTC
+      - name: Run Font Patch Script
+        run: |
+          function patch_fonts {
+            local font_dir=$1
+            local font_name=$2
+            local sarasa_dir=$3
+            local sarasa_name=$4
+            local styles=("Regular" "Bold" "Italic" "BoldItalic" "ExtraLight" "ExtraLightItalic" "Light" "LightItalic" "SemiBold" "SemiBoldItalic")
+            for style in "${styles[@]}"; do
+              python font_patch.py "${font_dir}/${font_name}-${style}.ttf" "${sarasa_dir}/${sarasa_name}-${style}.ttf" "${font_name} ${sarasa_name}" "${style}"
+              zip -r "${font_name}-${sarasa_name}.zip" "${font_name} ${sarasa_name}"
+            done
+          }
+          patch_fonts "./MonaspaceAr/monaspace-${{ steps.monaspace.outputs.version }}/fonts/frozen" "MonaspaceArgonFrozen" "./SarasaGothicSC" "SarasaGothicSC"
+          patch_fonts "./MonaspaceAr/monaspace-${{ steps.monaspace.outputs.version }}/fonts/frozen" "MonaspaceArgonFrozen" "./SarasaGothicTC" "SarasaGothicTC"
+      - name: Pre-release
+        run: echo ${{ github.sha }} > Release.txt
+      - name: Release
+        id: release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: ${{ github.ref_name }}
+          body: |
+            - Monaspace: "${{ steps.monaspace.outputs.zip_file }}"
+            - Sarasa Gothic SC: SarasaGothicSC-TTF-Unhinted-${{ steps.sarasa.outputs.version }}.7z
+            - Sarasa Gothic TC: SarasaGothicTC-TTF-Unhinted-${{ steps.sarasa.outputs.version }}.7z
+          files: |
+            *.zip
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && success()
+
