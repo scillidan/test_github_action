@@ -430,19 +430,6 @@ jobs:
                 "${base_filename}-dictd.index"
             fi
             
-            # Generate SHA256 checksums
-            echo "Generating SHA256 checksums..."
-            for pattern in "${base_filename}*.txt" \
-                          "${base_filename}*.zip" \
-                          "${base_filename}*.slob"; do
-              for file in $pattern; do
-                if [[ -f "$file" ]]; then
-                  sha256sum "$file" > "${file}.sha256"
-                  echo "Generated SHA256 for $file"
-                fi
-              done
-            done
-            
             # Move all generated files to processed directory
             echo "Moving processed files..."
             for file in "${base_filename}"*; do
@@ -581,19 +568,25 @@ jobs:
           # 7. All original tab files (excluding formatted and html2ansi)
           echo "Creating all-original-txt.zip..."
           # Use find to exclude formatted and html2ansi files
-          find . -maxdepth 1 -name "*.txt" ! -name "*formatted*" ! -name "*html2ansi*" -type f | while read file; do
-            # Remove ./ prefix if present
-            file="${file#./}"
-            echo "  adding: $file"
-          done > /tmp/original_files.txt
-          
-          if [[ -s /tmp/original_files.txt ]]; then
-            # Use xargs to handle many files
-            find . -maxdepth 1 -name "*.txt" ! -name "*formatted*" ! -name "*html2ansi*" -type f -print0 | xargs -0 zip -j all-original-txt.zip
-            echo "Created all-original-txt.zip with $(wc -l < /tmp/original_files.txt) files"
-            rm /tmp/original_files.txt
+          if ls *.txt 1> /dev/null 2>&1; then
+            # Create a temporary file list
+            > /tmp/original_files.txt
+            for file in *.txt; do
+              if [[ "$file" != *"formatted"* ]] && [[ "$file" != *"html2ansi"* ]]; then
+                echo "$file" >> /tmp/original_files.txt
+              fi
+            done
+            
+            if [[ -s /tmp/original_files.txt ]]; then
+              # Read files from the list and create zip
+              cat /tmp/original_files.txt | xargs zip -j all-original-txt.zip
+              echo "Created all-original-txt.zip with $(wc -l < /tmp/original_files.txt) files"
+              rm /tmp/original_files.txt
+            else
+              echo "No original txt files found"
+            fi
           else
-            echo "No original txt files found"
+            echo "No txt files found"
           fi
           
           # 8. All files in one big zip
@@ -607,24 +600,11 @@ jobs:
           echo "Collection files created:"
           ls -la *.zip 2>/dev/null || echo "No collection files created"
 
-      - name: Generate SHA256 checksums for collections
-        run: |
-          echo "Generating SHA256 checksums for collection files..."
-          cd collections
-          for file in *.zip; do
-            if [[ -f "$file" ]]; then
-              sha256sum "$file" > "${file}.sha256"
-              echo "Generated SHA256 for $file"
-            fi
-          done
-          ls -la *.sha256 2>/dev/null || echo "No checksum files generated"
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.date.outputs.RELEASE_DATE }}
           name: FreeDict *-eng Collection ${{ steps.date.outputs.RELEASE_DATE }}
-          generate_release_notes: true
           files: |
             collections/*.zip
           fail_on_unmatched_files: false
