@@ -512,93 +512,92 @@ jobs:
           cd collections
           
           # 1. All aard2.slob files
-          echo "Creating all-aard2.zip..."
+          echo "Creating _all-aard2-slob.zip..."
           if ls *.slob 1> /dev/null 2>&1; then
-            zip -j all-aard2.zip *.slob
-            echo "Created all-aard2.zip with $(ls *.slob 2>/dev/null | wc -l) files"
+            zip -j _all-aard2-slob.zip *.slob
+            echo "Created _all-aard2-slob.zip with $(ls *.slob 2>/dev/null | wc -l) files"
           else
             echo "No aard2 files found"
           fi
           
           # 2. All dictd.zip files
-          echo "Creating all-dictd.zip..."
-          if ls *dictd.zip 1> /dev/null 2>&1; then
-            zip -j all-dictd.zip *dictd.zip
-            echo "Created all-dictd.zip with $(ls *dictd.zip 2>/dev/null | wc -l) files"
+          echo "Creating _all-dictd.zip..."
+          if ls *-dictd.zip 1> /dev/null 2>&1; then
+            zip -j _all-dictd.zip *-dictd.zip
+            echo "Created _all-dictd.zip with $(ls *-dictd.zip 2>/dev/null | wc -l) files"
           else
             echo "No dictd files found"
           fi
           
-          # 3. All formatted.txt files
-          echo "Creating all-formatted-txt.zip..."
-          if ls *formatted.txt 1> /dev/null 2>&1; then
-            zip -j all-formatted-txt.zip *formatted.txt
-            echo "Created all-formatted-txt.zip with $(ls *formatted.txt 2>/dev/null | wc -l) files"
+          # 3. All *-formatted.txt files
+          echo "Creating _all-formatted-txt.zip..."
+          if ls *-formatted.txt 1> /dev/null 2>&1; then
+            # Get all formatted.txt files (excluding html2ansi files)
+            formatted_files=$(ls *-formatted.txt 2>/dev/null | grep -v html2ansi || true)
+            if [[ -n "$formatted_files" ]]; then
+              echo "$formatted_files" | xargs zip -j _all-formatted-txt.zip
+              echo "Created _all-formatted-txt.zip with $(echo "$formatted_files" | wc -w) files"
+            else
+              echo "No formatted.txt files found"
+            fi
           else
             echo "No formatted.txt files found"
           fi
           
-          # 4. All stardict.zip files
-          echo "Creating all-stardict.zip..."
-          if ls *stardict.zip 1> /dev/null 2>&1; then
-            zip -j all-stardict.zip *stardict.zip
-            echo "Created all-stardict.zip with $(ls *stardict.zip 2>/dev/null | wc -l) files"
+          # 4. All *-stardict.zip files
+          echo "Creating _all-stardict.zip..."
+          if ls *-stardict.zip 1> /dev/null 2>&1; then
+            zip -j _all-stardict.zip *-stardict.zip
+            echo "Created _all-stardict.zip with $(ls *-stardict.zip 2>/dev/null | wc -l) files"
           else
             echo "No stardict files found"
           fi
           
-          # 5. All sdcv.zip files
-          echo "Creating all-sdcv.zip..."
-          if ls *sdcv.zip 1> /dev/null 2>&1; then
-            zip -j all-sdcv.zip *sdcv.zip
-            echo "Created all-sdcv.zip with $(ls *sdcv.zip 2>/dev/null | wc -l) files"
+          # 5. All *-sdcv.zip files
+          echo "Creating _all-sdcv.zip..."
+          if ls *-sdcv.zip 1> /dev/null 2>&1; then
+            zip -j _all-sdcv.zip *-sdcv.zip
+            echo "Created _all-sdcv.zip with $(ls *-sdcv.zip 2>/dev/null | wc -l) files"
           else
             echo "No sdcv files found"
           fi
           
-          # 6. All yomichan.zip files
-          echo "Creating all-yomichan.zip..."
-          if ls *yomichan.zip 1> /dev/null 2>&1; then
-            zip -j all-yomichan.zip *yomichan.zip
-            echo "Created all-yomichan.zip with $(ls *yomichan.zip 2>/dev/null | wc -l) files"
+          # 6. All *-yomichan.zip files
+          echo "Creating _all-yomichan.zip..."
+          if ls *-yomichan.zip 1> /dev/null 2>&1; then
+            zip -j _all-yomichan.zip *-yomichan.zip
+            echo "Created _all-yomichan.zip with $(ls *-yomichan.zip 2>/dev/null | wc -l) files"
           else
             echo "No yomichan files found"
           fi
           
-          # 7. All original tab files (excluding formatted and html2ansi)
-          echo "Creating all-original-txt.zip..."
-          # Use find to exclude formatted and html2ansi files
+          # 7. All original .txt files (excluding formatted and html2ansi)
+          echo "Creating _all-original-txt.zip..."
           if ls *.txt 1> /dev/null 2>&1; then
-            # Create a temporary file list
-            > /tmp/original_files.txt
-            for file in *.txt; do
-              if [[ "$file" != *"formatted"* ]] && [[ "$file" != *"html2ansi"* ]]; then
-                echo "$file" >> /tmp/original_files.txt
-              fi
-            done
-            
-            if [[ -s /tmp/original_files.txt ]]; then
-              # Read files from the list and create zip
-              cat /tmp/original_files.txt | xargs zip -j all-original-txt.zip
-              echo "Created all-original-txt.zip with $(wc -l < /tmp/original_files.txt) files"
-              rm /tmp/original_files.txt
+            # Get all .txt files that are not formatted or html2ansi
+            original_files=$(ls *.txt 2>/dev/null | grep -E '^[^-]+-[^-]+-[0-9]+\.txt$' || true)
+            if [[ -n "$original_files" ]]; then
+              echo "$original_files" | xargs zip -j _all-original-txt.zip
+              echo "Created _all-original-txt.zip with $(echo "$original_files" | wc -w) files"
             else
-              echo "No original txt files found"
+              echo "No original .txt files found"
             fi
           else
-            echo "No txt files found"
+            echo "No .txt files found"
           fi
           
-          # 8. All files in one big zip
-          echo "Creating all-files.zip..."
-          if ls * 1> /dev/null 2>&1; then
-            zip -j all-files.zip *
-            echo "Created all-files.zip with all files"
+          # 8. All *-formatted-html2ansi.txt files
+          echo "Creating _all-formatted-html2ansi-txt.zip..."
+          if ls *-formatted-html2ansi.txt 1> /dev/null 2>&1; then
+            zip -j _all-formatted-html2ansi-txt.zip *-formatted-html2ansi.txt
+            echo "Created _all-formatted-html2ansi-txt.zip with $(ls *-formatted-html2ansi.txt 2>/dev/null | wc -l) files"
+          else
+            echo "No html2ansi files found"
           fi
           
           echo ""
           echo "Collection files created:"
-          ls -la *.zip 2>/dev/null || echo "No collection files created"
+          ls -la _all-*.zip 2>/dev/null || echo "No collection files created"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -606,7 +605,8 @@ jobs:
           tag_name: ${{ steps.date.outputs.RELEASE_DATE }}
           name: FreeDict *-eng Collection ${{ steps.date.outputs.RELEASE_DATE }}
           files: |
-            collections/*.zip
+            collections/_all-*.zip
           fail_on_unmatched_files: false
           draft: false
           prerelease: false
+          body: ""
