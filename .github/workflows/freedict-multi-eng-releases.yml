@@ -1,4 +1,4 @@
-name: Create Releases (Auto-discover *-eng dictionaries)
+name: Create Releases (All *-eng dictionaries in one release)
 
 on:
   schedule:
@@ -160,10 +160,10 @@ jobs:
           if [[ "$latest_version" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}$ ]]; then
             # New format: 2024.10.10 -> 20241010
             file_version=$(echo "$latest_version" | sed 's/\.//g')
-            tag_version=$file_version
+            tag_version="$latest_version"
           else
-            # Old format: 0.2.2 -> remove dots for filename
-            file_version=$(echo "$latest_version" | tr -d '.')
+            # Old format: 0.2.2 -> keep as is
+            file_version="$latest_version"
             tag_version="$latest_version"
           fi
           
@@ -180,8 +180,7 @@ jobs:
           fi
           
           # Set outputs for subsequent steps
-          echo "TAG_NAME=$lang_pair-$tag_version" >> $GITHUB_OUTPUT
-          echo "RELEASE_NAME=$lang_pair $latest_version" >> $GITHUB_OUTPUT
+          echo "TAG_VERSION=$tag_version" >> $GITHUB_OUTPUT
           echo "FILE_VERSION=$file_version" >> $GITHUB_OUTPUT
           echo "LATEST_VERSION=$latest_version" >> $GITHUB_OUTPUT
           echo "lang_pair=$lang_pair" >> $GITHUB_OUTPUT
@@ -401,7 +400,7 @@ jobs:
             --read-format=Tabfile --write-format=Aard2Slob \
             --name="FreeDict-$lang_pair"
 
-      - name: Create ZIP archives
+      - name: Create ZIP archives for individual dictionaries
         if: steps.check_version.outputs.should_continue == 'true'
         run: |
           lang_pair="${{ steps.check_version.outputs.lang_pair }}"
@@ -437,10 +436,10 @@ jobs:
           fi
           
           # List created files
-          echo "Created files:"
+          echo "Created individual files:"
           ls -la *.zip *.slob 2>/dev/null || echo "No zip or slob files found"
 
-      - name: Generate SHA256 checksums
+      - name: Generate SHA256 checksums for individual files
         if: steps.check_version.outputs.should_continue == 'true'
         run: |
           lang_pair="${{ steps.check_version.outputs.lang_pair }}"
@@ -463,17 +462,229 @@ jobs:
           # List generated checksum files
           ls -la *.sha256 2>/dev/null || echo "No checksum files generated"
 
-      - name: Create GitHub Release
+      - name: Upload artifacts for collection
         if: steps.check_version.outputs.should_continue == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ steps.check_version.outputs.lang_pair }}-${{ steps.check_version.outputs.FILE_VERSION }}
-          name: FreeDict ${{ steps.check_version.outputs.lang_pair }} ${{ steps.check_version.outputs.LATEST_VERSION }}
-          files: |
+          name: dict-${{ steps.check_version.outputs.lang_pair }}-${{ steps.check_version.outputs.FILE_VERSION }}
+          path: |
             _freedict-${{ steps.check_version.outputs.lang_pair }}-${{ steps.check_version.outputs.FILE_VERSION }}*.txt
             freedict-${{ steps.check_version.outputs.lang_pair }}-${{ steps.check_version.outputs.FILE_VERSION }}*.zip
             freedict-${{ steps.check_version.outputs.lang_pair }}-${{ steps.check_version.outputs.FILE_VERSION }}*.slob
             *.sha256
+          retention-days: 1
+          if-no-files-found: warn
+
+  # Third job: collect all processed files and create a single release
+  create-combined-release:
+    needs: [discover-dictionaries, process-dictionaries]
+    if: ${{ fromJson(needs.discover-dictionaries.outputs.matrix).lang_pair[0] != null }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip
+
+      - name: Download all dictionary artifacts
+        run: |
+          echo "Downloading all dictionary artifacts..."
+          mkdir -p all-dictionaries
+          
+      - name: Get current date for release tag
+        id: date
+        run: |
+          # Get current date in YYYYMMDD format
+          current_date=$(date -u +"%Y%m%d")
+          echo "RELEASE_DATE=$current_date" >> $GITHUB_OUTPUT
+          echo "Release will be tagged as: $current_date"
+
+      - name: Collect all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-dictionaries
+          pattern: dict-*
+          merge-multiple: true
+
+      - name: List collected files
+        run: |
+          echo "Collected files structure:"
+          find all-dictionaries -type f | sort
+          echo ""
+          echo "Total files found: $(find all-dictionaries -type f | wc -l)"
+
+      - name: Create collection zip files
+        run: |
+          echo "Creating collection zip files..."
+          
+          # Create collections directory
+          mkdir -p collections
+          
+          # 1. All aard2.slob files
+          echo "Creating all-aard2.zip..."
+          find all-dictionaries -name "*.slob" -type f | xargs -I {} cp {} collections/ 2>/dev/null || true
+          if ls collections/*.slob 1> /dev/null 2>&1; then
+            cd collections && zip -j all-aard2.zip *.slob && cd ..
+            echo "Created all-aard2.zip with $(ls collections/*.slob 2>/dev/null | wc -l) files"
+          else
+            echo "No aard2 files found"
+          fi
+          
+          # 2. All dictd.zip files
+          echo "Creating all-dictd.zip..."
+          rm -f collections/*.zip
+          find all-dictionaries -name "*dictd.zip" -type f | xargs -I {} cp {} collections/ 2>/dev/null || true
+          if ls collections/*dictd.zip 1> /dev/null 2>&1; then
+            cd collections && zip -j all-dictd.zip *dictd.zip && cd ..
+            echo "Created all-dictd.zip with $(ls collections/*dictd.zip 2>/dev/null | wc -l) files"
+          else
+            echo "No dictd files found"
+          fi
+          
+          # 3. All formatted.txt files
+          echo "Creating all-formatted-txt.zip..."
+          rm -f collections/*.txt
+          find all-dictionaries -name "*formatted.txt" -type f | xargs -I {} cp {} collections/ 2>/dev/null || true
+          if ls collections/*formatted.txt 1> /dev/null 2>&1; then
+            cd collections && zip -j all-formatted-txt.zip *formatted.txt && cd ..
+            echo "Created all-formatted-txt.zip with $(ls collections/*formatted.txt 2>/dev/null | wc -l) files"
+          else
+            echo "No formatted.txt files found"
+          fi
+          
+          # 4. All stardict.zip files
+          echo "Creating all-stardict.zip..."
+          rm -f collections/*stardict.zip
+          find all-dictionaries -name "*stardict.zip" -type f | xargs -I {} cp {} collections/ 2>/dev/null || true
+          if ls collections/*stardict.zip 1> /dev/null 2>&1; then
+            cd collections && zip -j all-stardict.zip *stardict.zip && cd ..
+            echo "Created all-stardict.zip with $(ls collections/*stardict.zip 2>/dev/null | wc -l) files"
+          else
+            echo "No stardict files found"
+          fi
+          
+          # 5. All sdcv.zip files
+          echo "Creating all-sdcv.zip..."
+          rm -f collections/*sdcv.zip
+          find all-dictionaries -name "*sdcv.zip" -type f | xargs -I {} cp {} collections/ 2>/dev/null || true
+          if ls collections/*sdcv.zip 1> /dev/null 2>&1; then
+            cd collections && zip -j all-sdcv.zip *sdcv.zip && cd ..
+            echo "Created all-sdcv.zip with $(ls collections/*sdcv.zip 2>/dev/null | wc -l) files"
+          else
+            echo "No sdcv files found"
+          fi
+          
+          # 6. All yomichan.zip files
+          echo "Creating all-yomichan.zip..."
+          rm -f collections/*yomichan.zip
+          find all-dictionaries -name "*yomichan.zip" -type f | xargs -I {} cp {} collections/ 2>/dev/null || true
+          if ls collections/*yomichan.zip 1> /dev/null 2>&1; then
+            cd collections && zip -j all-yomichan.zip *yomichan.zip && cd ..
+            echo "Created all-yomichan.zip with $(ls collections/*yomichan.zip 2>/dev/null | wc -l) files"
+          else
+            echo "No yomichan files found"
+          fi
+          
+          # 7. All original tab files
+          echo "Creating all-original-txt.zip..."
+          rm -f collections/*.txt
+          find all-dictionaries -name "*.txt" ! -name "*formatted*" ! -name "*html2ansi*" -type f | xargs -I {} cp {} collections/ 2>/dev/null || true
+          if ls collections/*.txt 1> /dev/null 2>&1; then
+            cd collections && zip -j all-original-txt.zip *.txt && cd ..
+            echo "Created all-original-txt.zip with $(ls collections/*.txt 2>/dev/null | wc -l) files"
+          else
+            echo "No original txt files found"
+          fi
+          
+          # List all collection files
+          echo ""
+          echo "Collection files created:"
+          ls -la collections/*.zip 2>/dev/null || echo "No collection files created"
+
+      - name: Create README file
+        run: |
+          current_date="${{ steps.date.outputs.RELEASE_DATE }}"
+          echo "Creating README.md for release $current_date"
+          
+          cat > README.md << EOF
+          # FreeDict *-eng Dictionaries Collection
+          
+          ## Release Date: $current_date
+          
+          This release contains automatically converted dictionaries from FreeDict project.
+          All dictionaries are from various languages to English (*-eng).
+          
+          ## Collection Files
+          
+          The following collection files are available:
+          
+          1. **all-aard2.zip** - All dictionaries in Aard2 (.slob) format
+          2. **all-dictd.zip** - All dictionaries in dictd format
+          3. **all-formatted-txt.zip** - All dictionaries in formatted tabfile format
+          4. **all-stardict.zip** - All dictionaries in Stardict format
+          5. **all-sdcv.zip** - All dictionaries in SDCV (Stardict variant) format
+          6. **all-yomichan.zip** - All dictionaries in Yomichan format
+          7. **all-original-txt.zip** - All dictionaries in original tabfile format
+          
+          ## Individual Files
+          
+          Individual dictionary files are organized in the following structure:
+          \`\`\`
+          freedict-[LANG]-[VERSION]-[FORMAT].[ext]
+          \`\`\`
+          
+          Where:
+          - \`[LANG]\` is the language pair (e.g., afr-eng, deu-eng)
+          - \`[VERSION]\` is the version (YYYYMMDD for new format, x.y.z for old format)
+          - \`[FORMAT]\` is the format (stardict, sdcv, dictd, yomichan, aard2)
+          
+          ## Source
+          
+          All dictionaries are sourced from [FreeDict](https://freedict.org/).
+          
+          ## Automatic Updates
+          
+          This repository is automatically updated monthly via GitHub Actions.
+          New releases are created when dictionary updates are detected.
+          
+          ## Usage
+          
+          Choose the format appropriate for your dictionary application:
+          - **Stardict/SDCV**: For GoldenDict, StarDict, sdcv
+          - **dictd**: For dictd server
+          - **Yomichan**: For Yomichan browser extension
+          - **Aard2**: For Aard2 dictionary app
+          
+          EOF
+          
+          echo "README.md created successfully"
+
+      - name: Generate SHA256 checksums for collections
+        run: |
+          echo "Generating SHA256 checksums for collection files..."
+          cd collections
+          for file in *.zip; do
+            if [[ -f "$file" ]]; then
+              sha256sum "$file" > "${file}.sha256"
+              echo "Generated SHA256 for $file"
+            fi
+          done
+          ls -la *.sha256 2>/dev/null || echo "No checksum files generated"
+          cd ..
+
+      - name: Create single GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.date.outputs.RELEASE_DATE }}
+          name: FreeDict *-eng Collection ${{ steps.date.outputs.RELEASE_DATE }}
+          body_path: README.md
+          files: |
+            collections/*.zip
+            collections/*.sha256
+            all-dictionaries/**/*
           generate_release_notes: true
           fail_on_unmatched_files: false
           draft: false
