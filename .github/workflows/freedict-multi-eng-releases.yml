@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   # First job: discover all *-eng dictionaries from the FreeDict website
-  discover-and-build:
+  discover-dictionaries:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -22,10 +22,10 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y p7zip-full zip curl
+          sudo apt-get install -y curl
 
       - name: Discover all *-eng dictionaries
-        id: discover_dicts
+        id: discover
         run: |
           echo "Discovering all *-eng dictionaries from FreeDict..."
           
@@ -34,69 +34,73 @@ jobs:
           
           # Extract all language pair links (e.g., afr-eng/, deu-eng/, etc.)
           # Match patterns like href="afr-eng/"
-          lang_links=$(echo "$html" | grep -oP 'href="([a-z]{3}-[a-z]{3}/)"' | grep -oP '[a-z]{3}-[a-z]{3}')
+          lang_links=$(echo "$html" | grep -oP 'href="([a-z]{3}-[a-z]{3}/)"' | grep -oP '[a-z]{3}-[a-z]{3}' || true)
           
           if [[ -z "$lang_links" ]]; then
             echo "No language links found"
-            echo "No dictionaries to process"
+            # Create empty matrix
+            echo '{"lang_pair": []}' > matrix.json
             exit 0
           fi
           
           # Filter for *-eng dictionaries (any language to English)
           eng_dicts=()
-          for link in $lang_links; do
-            if [[ "$link" == *"-eng" ]]; then
-              # Skip invalid pairs like "eng-eng" (English to English)
-              if [[ "$link" != "eng-eng" ]]; then
-                eng_dicts+=("\"$link\"")
-                echo "Found: $link"
-              fi
+          while IFS= read -r link; do
+            if [[ "$link" == *"-eng" && "$link" != "eng-eng" ]]; then
+              eng_dicts+=("$link")
+              echo "Found: $link"
             fi
-          done
+          done <<< "$lang_links"
           
           # Remove duplicates and sort
-          unique_dicts=($(printf "%s\n" "${eng_dicts[@]}" | sort -u))
+          if [[ ${#eng_dicts[@]} -gt 0 ]]; then
+            readarray -t unique_dicts < <(printf "%s\n" "${eng_dicts[@]}" | sort -u)
+          else
+            unique_dicts=()
+          fi
           
           if [[ ${#unique_dicts[@]} -eq 0 ]]; then
             echo "No *-eng dictionaries found"
-            echo "No dictionaries to process"
-            exit 0
+            # Create empty matrix
+            echo '{"lang_pair": []}' > matrix.json
           else
-            echo "Found ${#unique_dicts[@]} *-eng dictionaries:"
-            for dict in "${unique_dicts[@]}"; do
-              echo "  $dict"
-            done
+            echo "Found ${#unique_dicts[@]} *-eng dictionaries"
             
-            # Create matrix JSON
-            matrix_json="{\"lang_pair\": [${unique_dicts[0]}"
-            for ((i=1; i<${#unique_dicts[@]}; i++)); do
-              matrix_json+=", ${unique_dicts[i]}"
+            # Create JSON array manually
+            matrix_json='{"lang_pair":['
+            for ((i=0; i<${#unique_dicts[@]}; i++)); do
+              if [[ $i -gt 0 ]]; then
+                matrix_json+=','
+              fi
+              matrix_json+="\"${unique_dicts[$i]}\""
             done
-            matrix_json+="]}"
+            matrix_json+=']}'
             
             echo "Matrix JSON: $matrix_json"
-            echo "MATRIX_JSON=$matrix_json" >> $GITHUB_ENV
+            echo "$matrix_json" > matrix.json
           fi
+          
+          # Show the matrix file
+          cat matrix.json
 
-      - name: Create job matrix
+      - name: Set matrix output
         id: set-matrix
         run: |
-          if [[ -n "${{ env.MATRIX_JSON }}" ]]; then
-            echo "matrix=${{ env.MATRIX_JSON }}" >> $GITHUB_OUTPUT
-            echo "Matrix set successfully"
+          if [[ -f matrix.json ]]; then
+            matrix_content=$(cat matrix.json)
+            echo "matrix=${matrix_content}" >> $GITHUB_OUTPUT
           else
+            echo '{"lang_pair": []}' > matrix.json
             echo "matrix={\"lang_pair\": []}" >> $GITHUB_OUTPUT
-            echo "No matrix to set"
           fi
 
   # Second job: process each discovered dictionary in parallel
   process-dictionaries:
-    needs: discover-and-build
-    if: ${{ fromJson(needs.discover-and-build.outputs.matrix).lang_pair[0] != null }}
+    needs: discover-dictionaries
     runs-on: ubuntu-latest
     # Use the dynamically discovered language pairs as a matrix
     strategy:
-      matrix: ${{ fromJson(needs.discover-and-build.outputs.matrix) }}
+      matrix: ${{ fromJson(needs.discover-dictionaries.outputs.matrix) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
