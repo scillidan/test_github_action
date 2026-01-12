@@ -578,11 +578,20 @@ jobs:
             echo "No yomichan files found"
           fi
           
-          # 7. All original tab files
+          # 7. All original tab files (excluding formatted and html2ansi)
           echo "Creating all-original-txt.zip..."
-          if ls *.txt !(*formatted*|*html2ansi*) 1> /dev/null 2>&1; then
-            zip -j all-original-txt.zip *.txt
-            echo "Created all-original-txt.zip with $(ls *.txt 2>/dev/null | wc -l) files"
+          # Use find to exclude formatted and html2ansi files
+          find . -maxdepth 1 -name "*.txt" ! -name "*formatted*" ! -name "*html2ansi*" -type f | while read file; do
+            # Remove ./ prefix if present
+            file="${file#./}"
+            echo "  adding: $file"
+          done > /tmp/original_files.txt
+          
+          if [[ -s /tmp/original_files.txt ]]; then
+            # Use xargs to handle many files
+            find . -maxdepth 1 -name "*.txt" ! -name "*formatted*" ! -name "*html2ansi*" -type f -print0 | xargs -0 zip -j all-original-txt.zip
+            echo "Created all-original-txt.zip with $(wc -l < /tmp/original_files.txt) files"
+            rm /tmp/original_files.txt
           else
             echo "No original txt files found"
           fi
