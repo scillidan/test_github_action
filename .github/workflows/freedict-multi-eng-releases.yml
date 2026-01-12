@@ -13,6 +13,8 @@ jobs:
   # First job: discover all *-eng dictionaries from the FreeDict website
   discover-and-build:
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -20,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y p7zip-full zip curl jq
+          sudo apt-get install -y p7zip-full zip curl
 
       - name: Discover all *-eng dictionaries
         id: discover_dicts
@@ -36,7 +38,7 @@ jobs:
           
           if [[ -z "$lang_links" ]]; then
             echo "No language links found"
-            echo "lang_pairs=[]" >> $GITHUB_OUTPUT
+            echo "No dictionaries to process"
             exit 0
           fi
           
@@ -46,7 +48,7 @@ jobs:
             if [[ "$link" == *"-eng" ]]; then
               # Skip invalid pairs like "eng-eng" (English to English)
               if [[ "$link" != "eng-eng" ]]; then
-                eng_dicts+=("$link")
+                eng_dicts+=("\"$link\"")
                 echo "Found: $link"
               fi
             fi
@@ -57,42 +59,44 @@ jobs:
           
           if [[ ${#unique_dicts[@]} -eq 0 ]]; then
             echo "No *-eng dictionaries found"
-            echo "lang_pairs=[]" >> $GITHUB_OUTPUT
+            echo "No dictionaries to process"
+            exit 0
           else
             echo "Found ${#unique_dicts[@]} *-eng dictionaries:"
-            printf "%s\n" "${unique_dicts[@]}"
+            for dict in "${unique_dicts[@]}"; do
+              echo "  $dict"
+            done
             
-            # Convert to JSON array format for GitHub Actions matrix
-            json_array=$(printf '%s\n' "${unique_dicts[@]}" | jq -R . | jq -s .)
-            echo "lang_pairs=$json_array" >> $GITHUB_OUTPUT
+            # Create matrix JSON
+            matrix_json="{\"lang_pair\": [${unique_dicts[0]}"
+            for ((i=1; i<${#unique_dicts[@]}; i++)); do
+              matrix_json+=", ${unique_dicts[i]}"
+            done
+            matrix_json+="]}"
+            
+            echo "Matrix JSON: $matrix_json"
+            echo "MATRIX_JSON=$matrix_json" >> $GITHUB_ENV
           fi
 
-      - name: Create job matrix for discovered dictionaries
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const langPairs = ${{ steps.discover_dicts.outputs.lang_pairs || '[]' }};
-            console.log(`Found ${langPairs.length} *-eng dictionaries to process`);
-            
-            // Create the job matrix dynamically
-            const matrix = { lang_pair: langPairs };
-            console.log('Matrix:', JSON.stringify(matrix, null, 2));
-            
-            // Set the matrix as output for the next job
-            core.setOutput('matrix', matrix);
+      - name: Create job matrix
         id: set-matrix
-
-    # Output the matrix for the next job
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
+        run: |
+          if [[ -n "${{ env.MATRIX_JSON }}" ]]; then
+            echo "matrix=${{ env.MATRIX_JSON }}" >> $GITHUB_OUTPUT
+            echo "Matrix set successfully"
+          else
+            echo "matrix={\"lang_pair\": []}" >> $GITHUB_OUTPUT
+            echo "No matrix to set"
+          fi
 
   # Second job: process each discovered dictionary in parallel
   process-dictionaries:
     needs: discover-and-build
+    if: ${{ fromJson(needs.discover-and-build.outputs.matrix).lang_pair[0] != null }}
     runs-on: ubuntu-latest
     # Use the dynamically discovered language pairs as a matrix
     strategy:
-      matrix: ${{ fromJSON(needs.discover-and-build.outputs.matrix) }}
+      matrix: ${{ fromJson(needs.discover-and-build.outputs.matrix) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
