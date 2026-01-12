@@ -1,0 +1,472 @@
+name: Create Releases (Auto-discover *-eng dictionaries)
+
+on:
+  schedule:
+    # 00:00 on the 1st of every month (UTC)
+    - cron: '0 0 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # First job: discover all *-eng dictionaries from the FreeDict website
+  discover-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full zip curl jq
+
+      - name: Discover all *-eng dictionaries
+        id: discover_dicts
+        run: |
+          echo "Discovering all *-eng dictionaries from FreeDict..."
+          
+          # Fetch the main dictionary listing page
+          html=$(curl -s -L -A "GitHub-Actions-CI" "https://download.freedict.org/dictionaries/")
+          
+          # Extract all language pair links (e.g., afr-eng/, deu-eng/, etc.)
+          # Match patterns like href="afr-eng/"
+          lang_links=$(echo "$html" | grep -oP 'href="([a-z]{3}-[a-z]{3}/)"' | grep -oP '[a-z]{3}-[a-z]{3}')
+          
+          if [[ -z "$lang_links" ]]; then
+            echo "No language links found"
+            echo "lang_pairs=[]" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Filter for *-eng dictionaries (any language to English)
+          eng_dicts=()
+          for link in $lang_links; do
+            if [[ "$link" == *"-eng" ]]; then
+              # Skip invalid pairs like "eng-eng" (English to English)
+              if [[ "$link" != "eng-eng" ]]; then
+                eng_dicts+=("$link")
+                echo "Found: $link"
+              fi
+            fi
+          done
+          
+          # Remove duplicates and sort
+          unique_dicts=($(printf "%s\n" "${eng_dicts[@]}" | sort -u))
+          
+          if [[ ${#unique_dicts[@]} -eq 0 ]]; then
+            echo "No *-eng dictionaries found"
+            echo "lang_pairs=[]" >> $GITHUB_OUTPUT
+          else
+            echo "Found ${#unique_dicts[@]} *-eng dictionaries:"
+            printf "%s\n" "${unique_dicts[@]}"
+            
+            # Convert to JSON array format for GitHub Actions matrix
+            json_array=$(printf '%s\n' "${unique_dicts[@]}" | jq -R . | jq -s .)
+            echo "lang_pairs=$json_array" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create job matrix for discovered dictionaries
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const langPairs = ${{ steps.discover_dicts.outputs.lang_pairs || '[]' }};
+            console.log(`Found ${langPairs.length} *-eng dictionaries to process`);
+            
+            // Create the job matrix dynamically
+            const matrix = { lang_pair: langPairs };
+            console.log('Matrix:', JSON.stringify(matrix, null, 2));
+            
+            // Set the matrix as output for the next job
+            core.setOutput('matrix', matrix);
+        id: set-matrix
+
+    # Output the matrix for the next job
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+
+  # Second job: process each discovered dictionary in parallel
+  process-dictionaries:
+    needs: discover-and-build
+    runs-on: ubuntu-latest
+    # Use the dynamically discovered language pairs as a matrix
+    strategy:
+      matrix: ${{ fromJSON(needs.discover-and-build.outputs.matrix) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full zip curl
+
+      - name: Check for latest source version
+        id: check_version
+        run: |
+          lang_pair="${{ matrix.lang_pair }}"
+          echo "Processing dictionary: $lang_pair"
+          
+          base_url="https://download.freedict.org/dictionaries/$lang_pair/"
+          echo "Checking URL: $base_url"
+          
+          # Try to fetch the dictionary page HTML
+          html=$(curl -s -L -A "GitHub-Actions-CI" "$base_url" || echo "")
+          
+          # Check if the page exists
+          if [[ -z "$html" ]] || [[ "$html" == *"404 Not Found"* ]] || [[ "$html" == *"Not Found"* ]]; then
+            echo "Dictionary $lang_pair not found or returned 404, skipping"
+            echo "should_continue=false" >> $GITHUB_OUTPUT
+            echo "lang_pair=$lang_pair" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Extract version numbers from the page
+          # Try to match <a href="version/"> format first
+          versions=$(echo "$html" | grep -oP 'href="(\d{4}\.\d{2}\.\d{2}/)"' | grep -oP '\d{4}\.\d{2}\.\d{2}' | sort -V)
+          
+          if [[ -z "$versions" ]]; then
+            # Try older version format, e.g., 0.2.2/
+            versions=$(echo "$html" | grep -oP 'href="(\d+\.\d+\.\d+/)"' | grep -oP '\d+\.\d+\.\d+' | sort -V)
+          fi
+          
+          if [[ -z "$versions" ]]; then
+            # Try extracting from download links
+            versions=$(echo "$html" | grep -oP "freedict-$lang_pair-\d+\.\d+\.\d+" | grep -oP "\d+\.\d+\.\d+" | sort -V)
+          fi
+          
+          if [[ -z "$versions" ]]; then
+            echo "No versions found for $lang_pair"
+            echo "Page preview (first 500 chars): ${html:0:500}"
+            echo "should_continue=false" >> $GITHUB_OUTPUT
+            echo "lang_pair=$lang_pair" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Get the latest (highest) version
+          latest_version=$(echo "$versions" | tail -1)
+          echo "Latest version for $lang_pair: $latest_version"
+          
+          # Create filesystem-safe version identifier
+          if [[ "$latest_version" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}$ ]]; then
+            # New format: 2024.10.10 -> 20241010
+            file_version=$(echo "$latest_version" | sed 's/\.//g')
+            tag_version=$file_version
+          else
+            # Old format: 0.2.2 -> remove dots for filename
+            file_version=$(echo "$latest_version" | tr -d '.')
+            tag_version="$latest_version"
+          fi
+          
+          # Check if this is a new version compared to last time
+          last_version_file="last_version_${lang_pair}.txt"
+          if [[ -f $last_version_file ]]; then
+            last_version=$(cat $last_version_file)
+            if [[ "$latest_version" == "$last_version" ]]; then
+              echo "No new version for $lang_pair, skipping."
+              echo "should_continue=false" >> $GITHUB_OUTPUT
+              echo "lang_pair=$lang_pair" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+          
+          # Set outputs for subsequent steps
+          echo "TAG_NAME=$lang_pair-$tag_version" >> $GITHUB_OUTPUT
+          echo "RELEASE_NAME=$lang_pair $latest_version" >> $GITHUB_OUTPUT
+          echo "FILE_VERSION=$file_version" >> $GITHUB_OUTPUT
+          echo "LATEST_VERSION=$latest_version" >> $GITHUB_OUTPUT
+          echo "lang_pair=$lang_pair" >> $GITHUB_OUTPUT
+          
+          # Try to download the source file
+          filename="freedict-${lang_pair}-${latest_version}.src.tar.xz"
+          
+          # Try multiple possible URL patterns
+          download_urls=(
+            "${base_url}${latest_version}/$filename"
+            "${base_url}$filename"
+            "https://download.freedict.org/dictionaries/$lang_pair/$latest_version/$filename"
+            "https://download.freedict.org/dictionaries/$lang_pair/$filename"
+          )
+          
+          downloaded=false
+          for url in "${download_urls[@]}"; do
+            echo "Trying to download from: $url"
+            if curl -f -L -o "$filename" "$url"; then
+              echo "Successfully downloaded from $url"
+              downloaded=true
+              break
+            fi
+            sleep 1
+          done
+          
+          if [[ "$downloaded" != "true" ]]; then
+            echo "Failed to download $lang_pair $latest_version"
+            echo "should_continue=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Save the current version for future comparison
+          mkdir -p .version_cache
+          echo "$latest_version" > "$last_version_file"
+          echo "should_continue=true" >> $GITHUB_OUTPUT
+
+      - name: Extract downloaded archive
+        if: steps.check_version.outputs.should_continue == 'true'
+        run: |
+          lang_pair="${{ steps.check_version.outputs.lang_pair }}"
+          latest_version="${{ steps.check_version.outputs.LATEST_VERSION }}"
+          file_version="${{ steps.check_version.outputs.FILE_VERSION }}"
+          filename="freedict-${lang_pair}-${latest_version}.src.tar.xz"
+          
+          echo "Extracting $filename"
+          
+          # Extract the .xz archive
+          if ! 7z x "$filename" -o. 2>/dev/null; then
+            echo "Failed to extract $filename with 7z, trying tar directly..."
+            tar -xf "$filename" || exit 1
+          fi
+          
+          # Extract the .tar file (if it exists)
+          tar_file="${filename%.xz}"
+          if [[ -f "$tar_file" ]]; then
+            7z x "$tar_file" -o. 2>/dev/null || tar -xf "$tar_file" || exit 1
+          fi
+          
+          # Find and rename the extracted directory
+          src_dir="freedict-${lang_pair}-${file_version}"
+          
+          # Try common directory name patterns
+          possible_dirs=(
+            "$lang_pair"
+            "${lang_pair/_/-}"  # Replace underscore with dash if needed
+            "$(echo $lang_pair | cut -d'-' -f1)-$(echo $lang_pair | cut -d'-' -f2)"
+            "freedict-${lang_pair}-${latest_version}"
+            "freedict-${lang_pair}-${file_version}"
+          )
+          
+          for dir in "${possible_dirs[@]}"; do
+            if [[ -d "$dir" ]]; then
+              echo "Found directory: $dir"
+              if [[ "$dir" != "$src_dir" ]]; then
+                mv "$dir" "$src_dir"
+                echo "Renamed $dir to $src_dir"
+              fi
+              break
+            fi
+          done
+          
+          # Fallback: if directory not found with expected names
+          if [[ ! -d "$src_dir" ]]; then
+            # Look for any directory containing the language pair
+            found_dir=$(find . -maxdepth 1 -type d -name "*${lang_pair/_/-}*" -o -name "*${lang_pair}*" | grep -v "^\.$" | head -1)
+            if [[ -n "$found_dir" ]]; then
+              mv "$found_dir" "$src_dir"
+              echo "Renamed found directory $found_dir to $src_dir"
+            else
+              # Create directory and move extracted files
+              mkdir -p "$src_dir"
+              find . -maxdepth 1 -type f -name "*.tei" -o -name "*.xml" -o -name "*.txt" | xargs -I {} mv {} "$src_dir/" 2>/dev/null || true
+            fi
+          fi
+          
+          echo "SRC_DIR=$src_dir" >> $GITHUB_ENV
+          ls -la "$src_dir/" || true
+
+      - name: Set up Python
+        if: steps.check_version.outputs.should_continue == 'true'
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install pyglossary and dependencies
+        if: steps.check_version.outputs.should_continue == 'true'
+        run: pip install pyglossary lxml beautifulsoup4 python-idzip tqdm pyicu
+
+      - name: Convert dictionary with pyglossary
+        if: steps.check_version.outputs.should_continue == 'true'
+        run: |
+          lang_pair="${{ steps.check_version.outputs.lang_pair }}"
+          file_version="${{ steps.check_version.outputs.FILE_VERSION }}"
+          src_dir="${{ env.SRC_DIR }}"
+          
+          echo "Converting $lang_pair, version $file_version"
+          echo "Source directory: $src_dir"
+          ls -la "$src_dir/" || echo "Cannot list source directory"
+          
+          # Extract source and target language codes
+          src_lang=$(echo $lang_pair | cut -d'-' -f1)
+          tgt_lang=$(echo $lang_pair | cut -d'-' -f2)
+          
+          # Find the TEI file
+          tei_file=""
+          possible_tei_files=(
+            "$src_dir/$src_lang-$tgt_lang.tei"
+            "$src_dir/$lang_pair.tei"
+            "$src_dir/${lang_pair/_/-}.tei"
+            "$src_dir/freedict-$lang_pair.tei"
+            "$src_dir/freedict-${lang_pair/_/-}.tei"
+            "$src_dir/tei"
+            "$src_dir/*.tei"
+            "$(find "$src_dir" -name "*.tei" -type f | head -1)"
+          )
+          
+          for file in "${possible_tei_files[@]}"; do
+            if [[ -f "$file" ]]; then
+              tei_file="$file"
+              echo "Found TEI file: $tei_file"
+              break
+            fi
+          done
+          
+          # Fallback: look for XML files
+          if [[ -z "$tei_file" ]]; then
+            xml_file=$(find "$src_dir" -name "*.xml" -type f | head -1)
+            if [[ -n "$xml_file" ]]; then
+              tei_file="$xml_file"
+              echo "Using XML file as TEI: $tei_file"
+            else
+              echo "ERROR: No TEI or XML file found for $lang_pair"
+              ls -la "$src_dir/" || true
+              exit 1
+            fi
+          fi
+          
+          # Base filename for output
+          base_filename="_freedict-${lang_pair}-${file_version}"
+          
+          # Step 1: Convert TEI to tabfile format
+          echo "Step 1: Converting to tabfile format..."
+          pyglossary "$tei_file" "${base_filename}.txt" \
+            --read-format=FreeDict --write-format=Tabfile
+          
+          # Step 2: Format the tabfile (if formatting script exists)
+          if [[ -f "text_format.py" ]]; then
+            echo "Step 2: Formatting tabfile..."
+            python text_format.py "${base_filename}.txt" "${base_filename}-formatted.txt"
+          else
+            echo "text_format.py not found, using original tabfile..."
+            cp "${base_filename}.txt" "${base_filename}-formatted.txt"
+          fi
+          
+          # Step 3: Convert to Stardict format
+          echo "Step 3: Converting to Stardict format..."
+          pyglossary "${base_filename}-formatted.txt" \
+            "freedict-${lang_pair}-${file_version}-stardict" \
+            --read-format=Tabfile --write-format=Stardict \
+            --name="FreeDict-$lang_pair"
+          
+          # Step 4: Convert HTML to ANSI (if conversion script exists)
+          if [[ -f "html2ansi.py" ]]; then
+            echo "Step 4: Converting HTML to ANSI..."
+            python html2ansi.py "${base_filename}-formatted.txt" "${base_filename}-formatted-html2ansi.txt"
+          else
+            echo "html2ansi.py not found, using formatted file..."
+            cp "${base_filename}-formatted.txt" "${base_filename}-formatted-html2ansi.txt"
+          fi
+          
+          # Step 5: Convert to SDCV format (Stardict variant)
+          echo "Step 5: Converting to SDCV format..."
+          pyglossary "${base_filename}-formatted-html2ansi.txt" \
+            "freedict-${lang_pair}-${file_version}-sdcv" \
+            --read-format=Tabfile --write-format=Stardict \
+            --name="FreeDict-$lang_pair"
+          
+          # Step 6: Convert to dictd format
+          echo "Step 6: Converting to dictd format..."
+          pyglossary "${base_filename}-formatted-html2ansi.txt" \
+            "freedict-${lang_pair}-${file_version}-dictd" \
+            --read-format=Tabfile --write-format=DictOrg \
+            --write-options="dictzip=true" --name="FreeDict-$lang_pair"
+          
+          # Step 7: Convert to Yomichan format
+          echo "Step 7: Converting to Yomichan format..."
+          pyglossary "${base_filename}-formatted.txt" \
+            "freedict-${lang_pair}-${file_version}-yomichan.zip" \
+            --read-format=Tabfile --write-format=Yomichan \
+            --name="FreeDict-$lang_pair"
+          
+          # Step 8: Convert to Aard2 format
+          echo "Step 8: Converting to Aard2 format..."
+          pyglossary "${base_filename}-formatted.txt" \
+            "freedict-${lang_pair}-${file_version}-aard2.slob" \
+            --read-format=Tabfile --write-format=Aard2Slob \
+            --name="FreeDict-$lang_pair"
+
+      - name: Create ZIP archives
+        if: steps.check_version.outputs.should_continue == 'true'
+        run: |
+          lang_pair="${{ steps.check_version.outputs.lang_pair }}"
+          file_version="${{ steps.check_version.outputs.FILE_VERSION }}"
+          
+          # Create ZIP files for Stardict formats
+          for prefix in "freedict-${lang_pair}-${file_version}-stardict" \
+                       "freedict-${lang_pair}-${file_version}-sdcv"; do
+            if [[ -f "${prefix}.ifo" && -f "${prefix}.idx" ]]; then
+              # Check which dict file exists
+              if [[ -f "${prefix}.dict.dz" ]]; then
+                dict_file="${prefix}.dict.dz"
+              elif [[ -f "${prefix}.dict" ]]; then
+                dict_file="${prefix}.dict"
+              else
+                echo "No dict file found for $prefix, skipping"
+                continue
+              fi
+              echo "Creating ${prefix}.zip"
+              zip -j "${prefix}.zip" "${prefix}.ifo" "$dict_file" "${prefix}.idx"
+            else
+              echo "Missing required files for $prefix, skipping"
+            fi
+          done
+          
+          # Create ZIP file for dictd format
+          if [[ -f "freedict-${lang_pair}-${file_version}-dictd.dict.dz" && \
+                -f "freedict-${lang_pair}-${file_version}-dictd.index" ]]; then
+            echo "Creating freedict-${lang_pair}-${file_version}-dictd.zip"
+            zip -j "freedict-${lang_pair}-${file_version}-dictd.zip" \
+              "freedict-${lang_pair}-${file_version}-dictd.dict.dz" \
+              "freedict-${lang_pair}-${file_version}-dictd.index"
+          fi
+          
+          # List created files
+          echo "Created files:"
+          ls -la *.zip *.slob 2>/dev/null || echo "No zip or slob files found"
+
+      - name: Generate SHA256 checksums
+        if: steps.check_version.outputs.should_continue == 'true'
+        run: |
+          lang_pair="${{ steps.check_version.outputs.lang_pair }}"
+          file_version="${{ steps.check_version.outputs.FILE_VERSION }}"
+          
+          echo "Generating SHA256 checksums for $lang_pair $file_version"
+          
+          # Generate checksums for all relevant files
+          for pattern in "_freedict-${lang_pair}-${file_version}*.txt" \
+                        "freedict-${lang_pair}-${file_version}*.zip" \
+                        "freedict-${lang_pair}-${file_version}*.slob"; do
+            for file in $pattern; do
+              if [[ -f "$file" ]]; then
+                sha256sum "$file" > "${file}.sha256"
+                echo "Generated SHA256 for $file"
+              fi
+            done
+          done
+          
+          # List generated checksum files
+          ls -la *.sha256 2>/dev/null || echo "No checksum files generated"
+
+      - name: Create GitHub Release
+        if: steps.check_version.outputs.should_continue == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.check_version.outputs.lang_pair }}-${{ steps.check_version.outputs.FILE_VERSION }}
+          name: FreeDict ${{ steps.check_version.outputs.lang_pair }} ${{ steps.check_version.outputs.LATEST_VERSION }}
+          files: |
+            _freedict-${{ steps.check_version.outputs.lang_pair }}-${{ steps.check_version.outputs.FILE_VERSION }}*.txt
+            freedict-${{ steps.check_version.outputs.lang_pair }}-${{ steps.check_version.outputs.FILE_VERSION }}*.zip
+            freedict-${{ steps.check_version.outputs.lang_pair }}-${{ steps.check_version.outputs.FILE_VERSION }}*.slob
+            *.sha256
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          draft: false
+          prerelease: false
