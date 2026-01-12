@@ -10,7 +10,6 @@ permissions:
   contents: write
 
 jobs:
-  # First job: discover all *-eng dictionaries from the FreeDict website
   discover-dictionaries:
     runs-on: ubuntu-latest
     outputs:
@@ -62,10 +61,11 @@ jobs:
             echo "dictionaries=$json_array" >> $GITHUB_OUTPUT
           fi
 
-  # Second job: process all dictionaries sequentially
   process-all-dictionaries:
     needs: discover-dictionaries
     runs-on: ubuntu-latest
+    outputs:
+      has_files: ${{ steps.check-output.outputs.has_files }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -74,7 +74,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y p7zip-full zip curl
-
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
@@ -91,6 +90,7 @@ jobs:
           if [[ "$dicts_json" == "[]" ]]; then
             echo "No dictionaries to process"
             echo "dictionaries_list=" >> $GITHUB_OUTPUT
+            echo "has_files=false" >> $GITHUB_OUTPUT
             exit 0
           fi
           
@@ -105,7 +105,6 @@ jobs:
           printf -v dicts_str '%s,' "${DICT_ARRAY[@]}"
           dicts_str=${dicts_str%,}
           echo "dictionaries_list=$dicts_str" >> $GITHUB_OUTPUT
-
       - name: Process dictionaries sequentially
         env:
           DICTIONARIES: ${{ steps.parse-dicts.outputs.dictionaries_list }}
@@ -117,6 +116,9 @@ jobs:
           
           # Create output directory
           mkdir -p processed-dictionaries
+          
+          # Track if any dictionary was actually processed
+          processed_count=0
           
           # Process each dictionary sequentially
           for lang_pair in "${DICT_ARRAY[@]}"; do
@@ -245,59 +247,85 @@ jobs:
             [[ -z "$tei_file" ]] && echo "ERROR: No TEI or XML file found for $lang_pair" && process_next && continue
             
             echo "Found TEI file: $tei_file"
-
             base_filename="freedict-${lang_pair}-${file_version}"
             
             # Tabfile
+            echo "Converting to Tabfile format..."
             pyglossary "$tei_file" "_${base_filename}.txt" --read-format=FreeDict --write-format=Tabfile
             
             # tabfile-formatted.txt
-            python ../text_format.py "${base_filename}.txt" "_${base_filename}-formatted.txt"
+            echo "Formatting tabfile..."
+            python ../text_format.py "_${base_filename}.txt" "${base_filename}-formatted.txt"
             
             # Stardict
+            echo "Creating Stardict format..."
             pyglossary "${base_filename}-formatted.txt" "${base_filename}-stardict" --read-format=Tabfile --write-format=Stardict --name="FreeDict-$lang_pair"
             
             # tabfile-formatted-html2ansi.txt
+            echo "Converting HTML to ANSI..."
             python ../html2ansi.py "${base_filename}-formatted.txt" "_${base_filename}-formatted-html2ansi.txt"
-
             # SDCV
+            echo "Creating SDCV format..."
             pyglossary "_${base_filename}-formatted-html2ansi.txt" "${base_filename}-sdcv" --read-format=Tabfile --write-format=Stardict --name="FreeDict-$lang_pair"
-
             # dictd
+            echo "Creating dictd format..."
             pyglossary "_${base_filename}-formatted-html2ansi.txt" "${base_filename}-dictd" --read-format=Tabfile --write-format=DictOrg --write-options="dictzip=true" --name="FreeDict-$lang_pair"
-
             # Yomichan
+            echo "Creating Yomichan format..."
             pyglossary "${base_filename}-formatted.txt" "${base_filename}-yomichan.zip" --read-format=Tabfile --write-format=Yomichan --name="FreeDict-$lang_pair"
             
             # Aard2
+            echo "Creating Aard2 format..."
             pyglossary "${base_filename}-formatted.txt" "${base_filename}-aard2.slob" --read-format=Tabfile --write-format=Aard2Slob --name="FreeDict-$lang_pair"
             
             # ZIP for Stardict
+            echo "Creating ZIP files..."
             for prefix in "${base_filename}-stardict" "${base_filename}-sdcv"; do
               zip -j "${prefix}.zip" "${prefix}.ifo" "${prefix}.dict"* "${prefix}.idx" 2>/dev/null || true
             done
-
             # ZIP for dictd
             zip -j "${base_filename}-dictd.zip" \
               "${base_filename}-dictd.dict.dz" \
               "${base_filename}-dictd.index"
-
+            
             # Move all generated files to processed directory
+            echo "Moving files to processed-dictionaries directory..."
             for file in "${base_filename}"* "_${base_filename}"*; do
               if [[ -f "$file" ]]; then
-                mv "$file" "../processed-dictionaries/"
+                mv "$file" "../processed-dictionaries/" && echo "Moved: $file"
               fi
             done
-
+            
             mkdir -p ../.version_cache
             echo "$latest_version" > "../.version_cache/last_version_${lang_pair}.txt"
             
+            processed_count=$((processed_count + 1))
+            
             process_next
-
             sleep 2
           done
-
+          
+          echo "Total dictionaries processed: $processed_count"
+          if [[ $processed_count -eq 0 ]]; then
+            echo "No new dictionaries were processed"
+          else
+            echo "Successfully processed $processed_count dictionaries"
+          fi
+      
+      - name: Check if files were generated
+        id: check-output
+        run: |
+          if [ -n "$(ls -A processed-dictionaries 2>/dev/null || true)" ]; then
+            echo "Files found in processed-dictionaries"
+            ls -la processed-dictionaries/
+            echo "has_files=true" >> $GITHUB_OUTPUT
+          else
+            echo "No files found in processed-dictionaries"
+            echo "has_files=false" >> $GITHUB_OUTPUT
+          fi
+        
       - name: Upload processed files
+        if: steps.check-output.outputs.has_files == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: processed-dictionaries
@@ -308,11 +336,11 @@ jobs:
   create-combined-release:
     needs: [discover-dictionaries, process-all-dictionaries]
     runs-on: ubuntu-latest
-    if: ${{ !failure() && !cancelled() && (needs.process-all-dictionaries.result == 'success') }}
+    if: ${{ !failure() && !cancelled() && needs.process-all-dictionaries.outputs.has_files == 'true' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-  
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -329,7 +357,7 @@ jobs:
         with:
           name: processed-dictionaries
           path: processed-dictionaries
-  
+
       - name: Create collection ZIP files
         run: |
           mkdir -p collections
