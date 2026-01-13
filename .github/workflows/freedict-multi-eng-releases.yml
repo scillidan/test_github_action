@@ -287,10 +287,10 @@ jobs:
             pyglossary "_${base_filename}-formatted.txt" "${base_filename}-aard2.slob" --read-format=Tabfile --write-format=Aard2Slob --name="FreeDict-$lang_pair"
 
             # ZIP Stardict
-              for base in *.ifo; do
-                prefix="${base%.ifo}"
-                zip -j "${prefix}.zip" "$prefix.ifo" "$prefix.dict" "$prefix.idx" 2>/dev/null || true
-              done
+            for base in *.ifo; do
+              prefix="${base%.ifo}"
+              zip -j "${prefix}.zip" "$prefix.ifo" "$prefix.dict" "$prefix.idx" 2>/dev/null || true
+            done
 
             # ZIP dictd
             zip -j "${base_filename}-dictd.zip" \
