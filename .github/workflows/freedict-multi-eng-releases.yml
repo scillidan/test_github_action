@@ -10,7 +10,6 @@ permissions:
   contents: write
 
 jobs:
-# First job: discover all *-eng dictionaries from the FreeDict website
   discover-dictionaries:
     runs-on: ubuntu-latest
     outputs:
@@ -23,23 +22,22 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y curl
+
       - name: Discover all *-eng dictionaries
         id: discover
         run: |
-          echo "Discovering all *-eng dictionaries from FreeDict..."
-          
           # Fetch the main dictionary listing page
           html=$(curl -s -L -A "GitHub-Actions-CI" "https://download.freedict.org/dictionaries/")
-          
+
           # Extract all language pair links
           lang_links=$(echo "$html" | grep -oP 'href="([a-z]{3}-[a-z]{3}/)"' | grep -oP '[a-z]{3}-[a-z]{3}' || true)
-          
+
           if [[ -z "$lang_links" ]]; then
             echo "No language links found"
             echo "dictionaries=[]" >> $GITHUB_OUTPUT
             exit 0
           fi
-          
+
           # Filter for *-eng dictionaries (any language to English)
           eng_dicts=()
           while IFS= read -r link; do
@@ -48,14 +46,14 @@ jobs:
               echo "Found: $link"
             fi
           done <<< "$lang_links"
-          
+
           # Remove duplicates and sort
           if [[ ${#eng_dicts[@]} -gt 0 ]]; then
             readarray -t unique_dicts < <(printf "%s\n" "${eng_dicts[@]}" | sort -u)
           else
             unique_dicts=()
           fi
-          
+
           if [[ ${#unique_dicts[@]} -eq 0 ]]; then
             echo "No *-eng dictionaries found"
             echo "dictionaries=[]" >> $GITHUB_OUTPUT
@@ -72,6 +70,7 @@ jobs:
             json_array+="]"
             echo "dictionaries=$json_array" >> $GITHUB_OUTPUT
           fi
+
       - name: Set output
         id: set-output
         run: |
@@ -94,6 +93,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y p7zip-full zip curl
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
@@ -106,29 +106,29 @@ jobs:
         id: parse-dicts
         run: |
           echo "Debug: Raw dictionaries JSON: '${{ needs.discover-dictionaries.outputs.dictionaries }}'"
-          
+
           # Read the JSON array and convert to bash array
           dicts_json='${{ needs.discover-dictionaries.outputs.dictionaries }}'
-          
+
           if [[ "$dicts_json" == "[]" ]] || [[ -z "$dicts_json" ]]; then
             echo "No dictionaries to process (empty or null)"
             echo "dictionaries_list=" >> $GITHUB_OUTPUT
             echo "has_files=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-          
+
           # Debug: Show the JSON
           echo "Parsing dictionaries JSON: $dicts_json"
-          
+
           # Remove brackets and quotes, then convert to array
           dicts_json_clean=$(echo "$dicts_json" | sed 's/\[\|\]//g' | sed 's/"//g')
           echo "Cleaned JSON: $dicts_json_clean"
-          
+
           IFS=',' read -r -a DICT_ARRAY <<< "$dicts_json_clean"
-          
+
           echo "Processing ${#DICT_ARRAY[@]} dictionaries sequentially"
           echo "Dictionary list: ${DICT_ARRAY[@]}"
-          
+
           # Store array as string for use in subsequent steps
           printf -v dicts_str '%s,' "${DICT_ARRAY[@]}"
           dicts_str=${dicts_str%,}
@@ -141,27 +141,23 @@ jobs:
         run: |
           # Split the comma-separated list into array
           IFS=',' read -r -a DICT_ARRAY <<< "$DICTIONARIES"
-          
+
           [[ ${#DICT_ARRAY[@]} -eq 0 ]] && echo "No dictionaries to process" && exit 0
-          
+
           # Create output directory
           mkdir -p processed-dictionaries
-          
+
           # Track if any dictionary was actually processed
           processed_count=0
-          
+
           # Process each dictionary sequentially
           for lang_pair in "${DICT_ARRAY[@]}"; do
-            echo ""
-            echo "========================================================================"
-            echo "Processing dictionary: $lang_pair"
-            echo "========================================================================"
-            
+
             # Create temporary directory for this dictionary
             temp_dir="temp_${lang_pair}"
             mkdir -p "$temp_dir"
             cd "$temp_dir"
-            
+
             # Function to clean up and move to next dictionary
             process_next() {
               cd ..
@@ -169,48 +165,48 @@ jobs:
               echo "Finished processing $lang_pair"
               echo ""
             }
-            
+
             echo "Checking for latest version of $lang_pair..."
             base_url="https://download.freedict.org/dictionaries/$lang_pair/"
             echo "Checking URL: $base_url"
-            
+
             # Try to fetch the dictionary page HTML
             html=$(curl -s -L -A "GitHub-Actions-CI" "$base_url")
-            
+
             # Check if the page exists
             if [[ -z "$html" ]] || [[ "$html" == *"404 Not Found"* ]] || [[ "$html" == *"Not Found"* ]]; then
               echo "Dictionary $lang_pair not found or returned 404, skipping"
               process_next
               continue
             fi
-            
+
             # Extract version numbers from the page
             versions=$(echo "$html" | grep -oP 'href="(\d{4}\.\d{2}\.\d{2}/)"' | grep -oP '\d{4}\.\d{2}\.\d{2}' | sort -V)
             versions=${versions:-$(echo "$html" | grep -oP 'href="(\d+\.\d+\.\d+/)"' | grep -oP '\d+\.\d+\.\d+' | sort -V)}
             versions=${versions:-$(echo "$html" | grep -oP "freedict-$lang_pair-\d+\.\d+\.\d+" | grep -oP "\d+\.\d+\.\d+" | sort -V)}
-            
+
             [[ -z "$versions" ]] && echo "No versions found for $lang_pair, skipping" && process_next && continue
-            
+
             # Get the latest (highest) version
             latest_version=$(echo "$versions" | tail -1)
             echo "Latest version for $lang_pair: $latest_version"
-            
+
             # Create filesystem-safe version identifier
             [[ "$latest_version" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}$ ]] && \
               file_version=$(echo "$latest_version" | sed 's/\.//g') || \
               file_version="$latest_version"
             tag_version="$latest_version"
-            
+
             # Check if this is a new version compared to last time
             last_version_file="../last_version_${lang_pair}.txt"
             last_version=$(cat "$last_version_file" 2>/dev/null || echo "")
             [[ "$latest_version" == "$last_version" ]] && \
               echo "No new version for $lang_pair, skipping." && process_next && continue
-            
+
             # Try to download the source file
             filename="freedict-${lang_pair}-${latest_version}.src.tar.xz"
             downloaded=false
-            
+
             # Try multiple possible URL patterns
             for url in \
               "${base_url}${latest_version}/$filename" \
@@ -222,21 +218,21 @@ jobs:
               curl -f -L -o "$filename" "$url" && downloaded=true && break
               sleep 1
             done
-            
+
             [[ "$downloaded" != "true" ]] && echo "Failed to download $lang_pair $latest_version, skipping" && process_next && continue
-            
+
             # Extract the downloaded archive
             echo "Extracting $filename"
             7z x "$filename" -o. 2>/dev/null || tar -xf "$filename" || \
               { echo "Failed to extract $filename"; process_next; continue; }
-            
+
             # Extract the .tar file (if it exists)
             tar_file="${filename%.xz}"
             [[ -f "$tar_file" ]] && { 7z x "$tar_file" -o. 2>/dev/null || tar -xf "$tar_file"; }
-            
+
             # Find and rename the extracted directory
             src_dir="freedict-${lang_pair}-${file_version}"
-            
+
             # Try common directory name patterns
             for dir in \
               "$lang_pair" \
@@ -247,18 +243,18 @@ jobs:
             do
               [[ -d "$dir" && "$dir" != "$src_dir" ]] && mv "$dir" "$src_dir" && break
             done
-            
+
             # Fallback: if directory not found with expected names
             if [[ ! -d "$src_dir" ]]; then
               found_dir=$(find . -maxdepth 1 -type d -name "*${lang_pair/_/-}*" -o -name "*${lang_pair}*" | grep -v "^\.$" | head -1)
               [[ -n "$found_dir" ]] && mv "$found_dir" "$src_dir" || mkdir -p "$src_dir"
             fi
-            
+
             # Find the TEI file
             src_lang=$(echo $lang_pair | cut -d'-' -f1)
             tgt_lang=$(echo $lang_pair | cut -d'-' -f2)
             tei_file=""
-            
+
             for file in \
               "$src_dir/$src_lang-$tgt_lang.tei" \
               "$src_dir/$lang_pair.tei" \
@@ -271,77 +267,73 @@ jobs:
             do
               [[ -f "$file" ]] && tei_file="$file" && break
             done
-            
+
             # Fallback: look for XML files
             [[ -z "$tei_file" ]] && tei_file=$(find "$src_dir" -name "*.xml" -type f 2>/dev/null | head -1)
             [[ -z "$tei_file" ]] && echo "ERROR: No TEI or XML file found for $lang_pair" && process_next && continue
-            
+
             echo "Found TEI file: $tei_file"
             base_filename="freedict-${lang_pair}-${file_version}"
-            
-            # Tabfile
-            echo "Converting to Tabfile format..."
+
+            # tabfile
             pyglossary "$tei_file" "_${base_filename}.txt" --read-format=FreeDict --write-format=Tabfile
-            
-            # tabfile-formatted.txt
-            echo "Formatting tabfile..."
-            python ../text_format.py "_${base_filename}.txt" "${base_filename}-formatted.txt"
-            
-            # Stardict
-            echo "Creating Stardict format..."
-            pyglossary "${base_filename}-formatted.txt" "${base_filename}-stardict" --read-format=Tabfile --write-format=Stardict --name="FreeDict-$lang_pair"
-            
-            # tabfile-formatted-html2ansi.txt
-            echo "Converting HTML to ANSI..."
-            python ../html2ansi.py "${base_filename}-formatted.txt" "_${base_filename}-formatted-html2ansi.txt"
-            # SDCV
-            echo "Creating SDCV format..."
+
+            # tabfile-formatted
+            python ../text_format.py "_${base_filename}.txt" "_${base_filename}-formatted.txt"
+
+            # stardict
+            pyglossary "_${base_filename}-formatted.txt" "${base_filename}-stardict" --read-format=Tabfile --write-format=Stardict --name="FreeDict-$lang_pair"
+
+            # tabfile-formatted-html2ansi
+            python ../html2ansi.py "_${base_filename}-formatted.txt" "_${base_filename}-formatted-html2ansi.txt"
+
+            # sdcv
             pyglossary "_${base_filename}-formatted-html2ansi.txt" "${base_filename}-sdcv" --read-format=Tabfile --write-format=Stardict --name="FreeDict-$lang_pair"
+
             # dictd
-            echo "Creating dictd format..."
             pyglossary "_${base_filename}-formatted-html2ansi.txt" "${base_filename}-dictd" --read-format=Tabfile --write-format=DictOrg --write-options="dictzip=true" --name="FreeDict-$lang_pair"
-            # Yomichan
-            echo "Creating Yomichan format..."
-            pyglossary "${base_filename}-formatted.txt" "${base_filename}-yomichan.zip" --read-format=Tabfile --write-format=Yomichan --name="FreeDict-$lang_pair"
-            
-            # Aard2
-            echo "Creating Aard2 format..."
-            pyglossary "${base_filename}-formatted.txt" "${base_filename}-aard2.slob" --read-format=Tabfile --write-format=Aard2Slob --name="FreeDict-$lang_pair"
-            
-            # ZIP for Stardict
-            echo "Creating ZIP files..."
-            for prefix in "${base_filename}-stardict" "${base_filename}-sdcv"; do
-              zip -j "${prefix}.zip" "${prefix}.ifo" "${prefix}.dict"* "${prefix}.idx" 2>/dev/null || true
-            done
-            # ZIP for dictd
+
+            # yomichan
+            pyglossary "_${base_filename}-formatted.txt" "${base_filename}-yomichan.zip" --read-format=Tabfile --write-format=Yomichan --name="FreeDict-$lang_pair"
+
+            # aard2
+            pyglossary "_${base_filename}-formatted.txt" "${base_filename}-aard2.slob" --read-format=Tabfile --write-format=Aard2Slob --name="FreeDict-$lang_pair"
+
+          - name: ZIP Stardict
+            run: |
+              for base in *.ifo; do
+                prefix="${base%.ifo}"
+                zip -j "${prefix}.zip" "$prefix.ifo" "$prefix.dict" "$prefix.idx" 2>/dev/null || true
+              done
+
+            # ZIP dictd
             zip -j "${base_filename}-dictd.zip" \
               "${base_filename}-dictd.dict.dz" \
               "${base_filename}-dictd.index"
-            
+
             # Move all generated files to processed directory
-            echo "Moving files to processed-dictionaries directory..."
             for file in "${base_filename}"* "_${base_filename}"*; do
               if [[ -f "$file" ]]; then
                 mv "$file" "../processed-dictionaries/" && echo "Moved: $file"
               fi
             done
-            
+
             mkdir -p ../.version_cache
             echo "$latest_version" > "../.version_cache/last_version_${lang_pair}.txt"
-            
+
             processed_count=$((processed_count + 1))
-            
+
             process_next
             sleep 2
           done
-          
+
           echo "Total dictionaries processed: $processed_count"
           if [[ $processed_count -eq 0 ]]; then
             echo "No new dictionaries were processed"
           else
             echo "Successfully processed $processed_count dictionaries"
           fi
-      
+
       - name: Check if files were generated
         id: check-output
         run: |
@@ -353,7 +345,7 @@ jobs:
             echo "No files found in processed-dictionaries"
             echo "has_files=false" >> $GITHUB_OUTPUT
           fi
-        
+
       - name: Upload processed files
         if: steps.check-output.outputs.has_files == 'true'
         uses: actions/upload-artifact@v4
@@ -375,6 +367,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y zip
+
       - name: Get current date for release tag
         id: date
         run: |
@@ -382,6 +375,7 @@ jobs:
           current_date=$(date -u +"%Y%m%d")
           echo "RELEASE_DATE=$current_date" >> $GITHUB_OUTPUT
           echo "Release will be tagged as: $current_date"
+
       - name: Download processed dictionaries
         uses: actions/download-artifact@v4
         with:
@@ -400,6 +394,7 @@ jobs:
           zip -j all-aard2.zip *.slob
           zip -j _all-formatted-txt.zip _*formatted.txt
           zip -j _all-formatted-html2ansi-txt.zip _*formatted-html2ansi.txt
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
