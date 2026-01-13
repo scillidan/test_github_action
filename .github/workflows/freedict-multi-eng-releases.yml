@@ -144,26 +144,19 @@ jobs:
 
           [[ ${#DICT_ARRAY[@]} -eq 0 ]] && echo "No dictionaries to process" && exit 0
 
-          # Create output directory
-          mkdir -p processed-dictionaries
+          mkdir -p _convert
 
           # Track if any dictionary was actually processed
           processed_count=0
 
-          # Process each dictionary sequentially
           for lang_pair in "${DICT_ARRAY[@]}"; do
-
-            # Create temporary directory for this dictionary
             temp_dir="temp_${lang_pair}"
             mkdir -p "$temp_dir"
             cd "$temp_dir"
 
-            # Function to clean up and move to next dictionary
-            process_next() {
+            clear_temp() {
               cd ..
               rm -rf "$temp_dir"
-              echo "Finished processing $lang_pair"
-              echo ""
             }
 
             echo "Checking for latest version of $lang_pair..."
@@ -176,7 +169,7 @@ jobs:
             # Check if the page exists
             if [[ -z "$html" ]] || [[ "$html" == *"404 Not Found"* ]] || [[ "$html" == *"Not Found"* ]]; then
               echo "Dictionary $lang_pair not found or returned 404, skipping"
-              process_next
+              clear_temp
               continue
             fi
 
@@ -185,7 +178,7 @@ jobs:
             versions=${versions:-$(echo "$html" | grep -oP 'href="(\d+\.\d+\.\d+/)"' | grep -oP '\d+\.\d+\.\d+' | sort -V)}
             versions=${versions:-$(echo "$html" | grep -oP "freedict-$lang_pair-\d+\.\d+\.\d+" | grep -oP "\d+\.\d+\.\d+" | sort -V)}
 
-            [[ -z "$versions" ]] && echo "No versions found for $lang_pair, skipping" && process_next && continue
+            [[ -z "$versions" ]] && echo "No versions found for $lang_pair, skipping" && clear_temp && continue
 
             # Get the latest (highest) version
             latest_version=$(echo "$versions" | tail -1)
@@ -196,12 +189,6 @@ jobs:
               file_version=$(echo "$latest_version" | sed 's/\.//g') || \
               file_version="$latest_version"
             tag_version="$latest_version"
-
-            # Check if this is a new version compared to last time
-            last_version_file="../last_version_${lang_pair}.txt"
-            last_version=$(cat "$last_version_file" 2>/dev/null || echo "")
-            [[ "$latest_version" == "$last_version" ]] && \
-              echo "No new version for $lang_pair, skipping." && process_next && continue
 
             # Try to download the source file
             filename="freedict-${lang_pair}-${latest_version}.src.tar.xz"
@@ -219,12 +206,12 @@ jobs:
               sleep 1
             done
 
-            [[ "$downloaded" != "true" ]] && echo "Failed to download $lang_pair $latest_version, skipping" && process_next && continue
+            [[ "$downloaded" != "true" ]] && echo "Failed to download $lang_pair $latest_version, skipping" && clear_temp && continue
 
             # Extract the downloaded archive
             echo "Extracting $filename"
             7z x "$filename" -o. 2>/dev/null || tar -xf "$filename" || \
-              { echo "Failed to extract $filename"; process_next; continue; }
+              { echo "Failed to extract $filename"; clear_temp; continue; }
 
             # Extract the .tar file (if it exists)
             tar_file="${filename%.xz}"
@@ -270,7 +257,7 @@ jobs:
 
             # Fallback: look for XML files
             [[ -z "$tei_file" ]] && tei_file=$(find "$src_dir" -name "*.xml" -type f 2>/dev/null | head -1)
-            [[ -z "$tei_file" ]] && echo "ERROR: No TEI or XML file found for $lang_pair" && process_next && continue
+            [[ -z "$tei_file" ]] && echo "ERROR: No TEI or XML file found for $lang_pair" && clear_temp && continue
 
             echo "Found TEI file: $tei_file"
             base_filename="freedict-${lang_pair}-${file_version}"
@@ -311,19 +298,14 @@ jobs:
               "${base_filename}-dictd.dict.dz" \
               "${base_filename}-dictd.index"
 
-            # Move all generated files to processed directory
             for file in "${base_filename}"* "_${base_filename}"*; do
               if [[ -f "$file" ]]; then
-                mv "$file" "../processed-dictionaries/" && echo "Moved: $file"
+                mv "$file" "../_convert/" && echo "Moved: $file"
               fi
             done
 
-            mkdir -p ../.version_cache
-            echo "$latest_version" > "../.version_cache/last_version_${lang_pair}.txt"
-
             processed_count=$((processed_count + 1))
-
-            process_next
+            clear_temp
             sleep 2
           done
 
@@ -337,12 +319,12 @@ jobs:
       - name: Check if files were generated
         id: check-output
         run: |
-          if [ -n "$(ls -A processed-dictionaries 2>/dev/null || true)" ]; then
-            echo "Files found in processed-dictionaries"
-            ls -la processed-dictionaries/
+          if [ -n "$(ls -A _convert 2>/dev/null || true)" ]; then
+            echo "Files found in _convert"
+            ls -la _convert/
             echo "has_files=true" >> $GITHUB_OUTPUT
           else
-            echo "No files found in processed-dictionaries"
+            echo "No files found in _convert"
             echo "has_files=false" >> $GITHUB_OUTPUT
           fi
 
@@ -350,8 +332,8 @@ jobs:
         if: steps.check-output.outputs.has_files == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: processed-dictionaries
-          path: processed-dictionaries/
+          name: _convert
+          path: _convert/
           retention-days: 1
           if-no-files-found: warn
 
@@ -379,14 +361,14 @@ jobs:
       - name: Download processed dictionaries
         uses: actions/download-artifact@v4
         with:
-          name: processed-dictionaries
-          path: processed-dictionaries
+          name: _convert
+          path: _convert
 
       - name: Create collection ZIP files
         run: |
-          mkdir -p collections
-          cp processed-dictionaries/* collections/ 2>/dev/null || true
-          cd collections
+          mkdir -p _collect
+          cp _convert/* _collect/ 2>/dev/null || true
+          cd _collect
           zip -j all-stardict.zip *stardict.zip
           zip -j all-sdcv.zip *sdcv.zip
           zip -j all-dictd.zip *dictd.zip
@@ -401,7 +383,7 @@ jobs:
           tag_name: ${{ steps.date.outputs.RELEASE_DATE }}
           name: FreeDict *-eng released ${{ steps.date.outputs.RELEASE_DATE }}
           files: |
-            processed-dictionaries/_*.txt
-            processed-dictionaries/*.zip
-            processed-dictionaries/*slob
-            collections/*.zip
+            _convert/_*.txt
+            _convert/*.zip
+            _convert/*slob
+            _collect/*.zip
