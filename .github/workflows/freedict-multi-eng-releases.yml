@@ -85,17 +85,25 @@ jobs:
       - name: Parse dictionary list
         id: parse-dicts
         run: |
+          echo "Debug: Raw dictionaries JSON: '${{ needs.discover-dictionaries.outputs.dictionaries }}'"
+          
           # Read the JSON array and convert to bash array
           dicts_json='${{ needs.discover-dictionaries.outputs.dictionaries }}'
-          if [[ "$dicts_json" == "[]" ]]; then
-            echo "No dictionaries to process"
+          
+          if [[ "$dicts_json" == "[]" ]] || [[ -z "$dicts_json" ]]; then
+            echo "No dictionaries to process (empty or null)"
             echo "dictionaries_list=" >> $GITHUB_OUTPUT
             echo "has_files=false" >> $GITHUB_OUTPUT
             exit 0
           fi
           
+          # Debug: Show the JSON
+          echo "Parsing dictionaries JSON: $dicts_json"
+          
           # Remove brackets and quotes, then convert to array
           dicts_json_clean=$(echo "$dicts_json" | sed 's/\[\|\]//g' | sed 's/"//g')
+          echo "Cleaned JSON: $dicts_json_clean"
+          
           IFS=',' read -r -a DICT_ARRAY <<< "$dicts_json_clean"
           
           echo "Processing ${#DICT_ARRAY[@]} dictionaries sequentially"
@@ -105,6 +113,8 @@ jobs:
           printf -v dicts_str '%s,' "${DICT_ARRAY[@]}"
           dicts_str=${dicts_str%,}
           echo "dictionaries_list=$dicts_str" >> $GITHUB_OUTPUT
+          echo "has_files=true" >> $GITHUB_OUTPUT
+
       - name: Process dictionaries sequentially
         env:
           DICTIONARIES: ${{ steps.parse-dicts.outputs.dictionaries_list }}
