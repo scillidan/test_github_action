@@ -14,7 +14,7 @@ jobs:
   discover-dictionaries:
     runs-on: ubuntu-latest
     outputs:
-      dictionaries: ${{ steps.discover.outputs.dictionaries }}
+      dictionaries: ${{ steps.set-output.outputs.dictionaries }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -23,121 +23,62 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y curl
-      
       - name: Discover all *-eng dictionaries
         id: discover
         run: |
           echo "Discovering all *-eng dictionaries from FreeDict..."
           
-          # Debug: Try different URLs
-          echo "Testing URL: https://download.freedict.org/dictionaries/"
-          
           # Fetch the main dictionary listing page
           html=$(curl -s -L -A "GitHub-Actions-CI" "https://download.freedict.org/dictionaries/")
-          echo "HTML response length: ${#html} characters"
           
-          if [[ ${#html} -lt 100 ]]; then
-            echo "ERROR: HTML response is too short"
-            echo "HTML content: $html"
-            echo "dictionaries=[]" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          # Save HTML for debugging
-          echo "$html" > dictionary_page.html
-          echo "Saved HTML to dictionary_page.html"
-          echo "First 1000 chars of HTML:"
-          head -c 1000 dictionary_page.html
-          echo ""
-          
-          # Extract all dictionary links - try multiple patterns
-          echo "Extracting dictionary links..."
-          
-          # Pattern 1: href="deu-eng/"
-          lang_links1=$(echo "$html" | grep -oP 'href="([a-z]{3}-[a-z]{3}/)"' | grep -oP '[a-z]{3}-[a-z]{3}' || true)
-          echo "Pattern 1 found links: $lang_links1"
-          
-          # Pattern 2: href="deu-eng"
-          lang_links2=$(echo "$html" | grep -oP 'href="([a-z]{3}-[a-z]{3})"' | grep -oP '[a-z]{3}-[a-z]{3}' || true)
-          echo "Pattern 2 found links: $lang_links2"
-          
-          # Pattern 3: deu-eng/
-          lang_links3=$(echo "$html" | grep -oP '[a-z]{3}-[a-z]{3}/' | grep -oP '[a-z]{3}-[a-z]{3}' || true)
-          echo "Pattern 3 found links: $lang_links3"
-          
-          # Pattern 4: deu-eng
-          lang_links4=$(echo "$html" | grep -oP '[a-z]{3}-[a-z]{3}' | sort -u || true)
-          echo "Pattern 4 found links: $lang_links4"
-          
-          # Combine all found links
-          lang_links=$(printf "%s\n%s\n%s\n%s" "$lang_links1" "$lang_links2" "$lang_links3" "$lang_links4" | sort -u)
-          echo "Combined unique links: $lang_links"
+          # Extract all language pair links
+          lang_links=$(echo "$html" | grep -oP 'href="([a-z]{3}-[a-z]{3}/)"' | grep -oP '[a-z]{3}-[a-z]{3}' || true)
           
           if [[ -z "$lang_links" ]]; then
-            echo "ERROR: No language links found with any pattern"
-            echo "Trying alternative approach - looking for dictionary directories..."
-            
-            # Try to get directory listing from the server
-            curl -I "https://download.freedict.org/dictionaries/"
-            
-            # Try wget to get directory listing
-            wget -O- "https://download.freedict.org/dictionaries/" || true
-            
+            echo "No language links found"
             echo "dictionaries=[]" >> $GITHUB_OUTPUT
             exit 0
           fi
           
           # Filter for *-eng dictionaries (any language to English)
-          echo "Filtering for *-eng dictionaries..."
           eng_dicts=()
           while IFS= read -r link; do
-            if [[ -n "$link" ]] && [[ "$link" == *"-eng" ]] && [[ "$link" != "eng-eng" ]]; then
+            if [[ "$link" == *"-eng" && "$link" != "eng-eng" ]]; then
               eng_dicts+=("$link")
-              echo "Found *-eng dictionary: $link"
+              echo "Found: $link"
             fi
           done <<< "$lang_links"
           
-          # Debug: Show all found *-eng dictionaries
-          echo "All *-eng dictionaries found: ${eng_dicts[@]}"
-          
           # Remove duplicates and sort
-          if [[ ${#eng_dicts[@]} -eq 0 ]]; then
+          if [[ ${#eng_dicts[@]} -gt 0 ]]; then
+            readarray -t unique_dicts < <(printf "%s\n" "${eng_dicts[@]}" | sort -u)
+          else
+            unique_dicts=()
+          fi
+          
+          if [[ ${#unique_dicts[@]} -eq 0 ]]; then
             echo "No *-eng dictionaries found"
             echo "dictionaries=[]" >> $GITHUB_OUTPUT
           else
-            echo "Found ${#eng_dicts[@]} *-eng dictionaries before deduplication"
-            
-            # Remove duplicates
-            unique_dicts=()
-            while IFS= read -r -d '' dict; do
-              unique_dicts+=("$dict")
-            done < <(printf "%s\0" "${eng_dicts[@]}" | sort -zu)
-            
-            # Alternative deduplication method
-            # readarray -t unique_dicts < <(printf "%s\n" "${eng_dicts[@]}" | sort -u)
-            
-            echo "Found ${#unique_dicts[@]} unique *-eng dictionaries after deduplication"
-            
-            # Test a few known dictionaries
-            echo "Testing known *-eng dictionaries..."
-            for test_dict in "spa-eng" "fra-eng" "deu-eng" "ita-eng" "rus-eng"; do
-              if [[ " ${eng_dicts[@]} " =~ " ${test_dict} " ]]; then
-                echo "✓ Found known dictionary: $test_dict"
-              else
-                echo "✗ Missing known dictionary: $test_dict"
-              fi
-            done
-            
+            echo "Found ${#unique_dicts[@]} *-eng dictionaries"
             # Convert array to JSON
             json_array="["
             for ((i=0; i<${#unique_dicts[@]}; i++)); do
-              [[ $i -gt 0 ]] && json_array+=","
+              if [[ $i -gt 0 ]]; then
+                json_array+=","
+              fi
               json_array+="\"${unique_dicts[$i]}\""
             done
             json_array+="]"
-            
-            echo "Final JSON array: $json_array"
             echo "dictionaries=$json_array" >> $GITHUB_OUTPUT
+          fi
+      - name: Set output
+        id: set-output
+        run: |
+          if [[ -n "${{ steps.discover.outputs.dictionaries }}" ]]; then
+            echo "dictionaries=${{ steps.discover.outputs.dictionaries }}" >> $GITHUB_OUTPUT
+          else
+            echo "dictionaries=[]" >> $GITHUB_OUTPUT
           fi
 
   process-all-dictionaries:
