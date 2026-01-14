@@ -215,7 +215,9 @@ jobs:
 
             # Extract the .tar file (if it exists)
             tar_file="${filename%.xz}"
-            [[ -f "$tar_file" ]] && { 7z x "$tar_file" -o. 2>/dev/null || tar -xf "$tar_file"; } && rm -f "$tar_file"
+            [[ -f "$tar_file" ]] && { 7z x "$tar_file" -o. 2>/dev/null || tar -xf "$tar_file"; }
+            rm -f *.tar.xz
+            rm -f *.tar
 
             # Find and rename the extracted directory
             src_dir="freedict-${lang_pair}-${file_version}"
