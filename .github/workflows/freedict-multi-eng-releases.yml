@@ -384,6 +384,7 @@ jobs:
           zip -j all-aard2.zip *.slob
           zip -j _all-formatted-txt.zip _*-formatted.txt
           zip -j _all-formatted-html2ansi-txt.zip _*-formatted-html2ansi.txt
+          rm -f *-stardict.zip *-sdcv.zip *-dictd.zip *-yomichan.zip *.slob _*-formatted*.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
