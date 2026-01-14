@@ -382,7 +382,6 @@ jobs:
           tag_name: ${{ steps.date.outputs.RELEASE_DATE }}
           name: FreeDict *-eng released ${{ steps.date.outputs.RELEASE_DATE }}
           files: |
-            _convert/_*.txt
             _convert/*.zip
             _convert/*slob
             _collect/*.zip
