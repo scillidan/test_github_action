@@ -370,7 +370,7 @@ jobs:
 
       - name: Create collection ZIP files
         run: |
-          cp _convert
+          cd _convert
           zip -j all-stardict.zip *-stardict.zip
           zip -j all-sdcv.zip *-sdcv.zip
           zip -j all-dictd.zip *-dictd.zip
