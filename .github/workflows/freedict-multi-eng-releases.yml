@@ -215,7 +215,7 @@ jobs:
 
             # Extract the .tar file (if it exists)
             tar_file="${filename%.xz}"
-            [[ -f "$tar_file" ]] && { 7z x "$tar_file" -o. 2>/dev/null || tar -xf "$tar_file"; }
+            [[ -f "$tar_file" ]] && { 7z x "$tar_file" -o. 2>/dev/null || tar -xf "$tar_file"; } && rm "$tar_file" && "$tar_file.xz"
 
             # Find and rename the extracted directory
             src_dir="freedict-${lang_pair}-${file_version}"
@@ -286,16 +286,20 @@ jobs:
             # aard2
             pyglossary "_${base_filename}-formatted.txt" "${base_filename}-aard2.slob" --read-format=Tabfile --write-format=Aard2Slob --name="FreeDict-$lang_pair"
 
-            # ZIP Stardict
-            for base in *.ifo; do
-              prefix="${base%.ifo}"
-              zip -j "${prefix}.zip" "$prefix.ifo" "$prefix.dict" "$prefix.idx" 2>/dev/null || true
+            # ZIP stardict
+            for base in *-stardict.ifo; do
+                prefix="${base%.ifo}"
+                zip -j "${prefix}.zip" "$prefix.ifo" "$prefix.dict" "$prefix.idx" 2>/dev/null && rm "$prefix.ifo" "$prefix.dict" "$prefix.idx"
+            done
+
+            # ZIP sdcv
+            for base in *-sdcv.ifo; do
+                prefix="${base%.ifo}"
+                zip -j "${prefix}.zip" "$prefix.ifo" "$prefix.dict" "$prefix.idx" "$prefix.syn" 2>/dev/null && rm "$prefix.ifo" "$prefix.dict" "$prefix.idx" "$prefix.syn"
             done
 
             # ZIP dictd
-            zip -j "${base_filename}-dictd.zip" \
-              "${base_filename}-dictd.dict.dz" \
-              "${base_filename}-dictd.index"
+            zip -j "${base_filename}-dictd.zip" "${base_filename}-dictd.dict.dz" "${base_filename}-dictd.index" && rm "${base_filename}-dictd.dict.dz" "${base_filename}-dictd.index"
 
             for file in "${base_filename}"* "_${base_filename}"*; do
               if [[ -f "$file" ]]; then
@@ -385,3 +389,4 @@ jobs:
             _convert/*.zip
             _convert/*.slob
             _collect/*.zip
+          overwrite_files: true
