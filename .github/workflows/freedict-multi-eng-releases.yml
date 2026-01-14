@@ -1,4 +1,4 @@
-name: Create Releases (*-eng)
+name: Create Releases (multi-eng)
 
 on:
   schedule:
@@ -370,23 +370,20 @@ jobs:
 
       - name: Create collection ZIP files
         run: |
-          mkdir -p _collect
-          cp _convert/* _collect/ 2>/dev/null || true
-          cd _collect
-          zip -j all-stardict.zip *-stardict.zip && rm -f *-stardict.zip
-          zip -j all-sdcv.zip *-sdcv.zip && rm -f *-sdcv.zip
-          zip -j all-dictd.zip *-dictd.zip && rm -f *-dictd.zip
-          zip -j all-yomichan.zip *-yomichan.zip && rm -f *-yomichan.zip
-          zip -j all-aard2.zip *.slob && rm -f *.slob
-          zip -j _all-formatted-txt.zip _*-formatted.txt && rm -f _*-formatted.txt
-          zip -j _all-formatted-html2ansi-txt.zip _*-formatted-html2ansi.txt && rm -f _*-formatted-html2ansi.txt
+          cp _convert
+          zip -j all-stardict.zip *-stardict.zip
+          zip -j all-sdcv.zip *-sdcv.zip
+          zip -j all-dictd.zip *-dictd.zip
+          zip -j all-yomichan.zip *-yomichan.zip
+          zip -j all-aard2.zip *.slob
+          zip -j _all-formatted-txt.zip _*-formatted.txt
+          zip -j _all-formatted-html2ansi-txt.zip _*-formatted-html2ansi.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.date.outputs.RELEASE_DATE }}
-          name: FreeDict *-eng released ${{ steps.date.outputs.RELEASE_DATE }}
+          name: FreeDict multi-eng released ${{ steps.date.outputs.RELEASE_DATE }}
           files: |
-            _convert/*.{zip,slob}
-            _collect/*.zip
+            _convert/*.{txt,zip,slob}
           overwrite_files: true
