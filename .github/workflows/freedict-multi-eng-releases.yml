@@ -368,13 +368,13 @@ jobs:
           mkdir -p _collect
           cp _convert/* _collect/ 2>/dev/null || true
           cd _collect
-          zip -j all-stardict.zip *stardict.zip
-          zip -j all-sdcv.zip *sdcv.zip
-          zip -j all-dictd.zip *dictd.zip
-          zip -j all-yomichan.zip *yomichan.zip
+          zip -j all-stardict.zip *-stardict.zip
+          zip -j all-sdcv.zip *-sdcv.zip
+          zip -j all-dictd.zip *-dictd.zip
+          zip -j all-yomichan.zip *-yomichan.zip
           zip -j all-aard2.zip *.slob
-          zip -j _all-formatted-txt.zip _*formatted.txt
-          zip -j _all-formatted-html2ansi-txt.zip _*formatted-html2ansi.txt
+          zip -j _all-formatted-txt.zip _*-formatted.txt
+          zip -j _all-formatted-html2ansi-txt.zip _*-formatted-html2ansi.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -383,5 +383,5 @@ jobs:
           name: FreeDict *-eng released ${{ steps.date.outputs.RELEASE_DATE }}
           files: |
             _convert/*.zip
-            _convert/*slob
+            _convert/*.slob
             _collect/*.zip
