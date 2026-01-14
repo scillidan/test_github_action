@@ -297,11 +297,14 @@ jobs:
             # ZIP sdcv
             for base in *-sdcv.ifo; do
                 prefix="${base%.ifo}"
-                zip -j "${prefix}.zip" "$prefix.ifo" "$prefix.dict" "$prefix.idx" "$prefix.syn" 2>/dev/null && rm -f "$prefix.ifo" "$prefix.dict" "$prefix.idx" "$prefix.syn"
+                zip -j "${prefix}.zip" "$prefix.dict" "$prefix.idx" "$prefix.ifo" "$prefix.syn" 2>/dev/null
             done
 
             # ZIP dictd
-            zip -j "${base_filename}-dictd.zip" "${base_filename}-dictd.dict.dz" "${base_filename}-dictd.index" && rm -f "${base_filename}-dictd.dict.dz" "${base_filename}-dictd.index"
+            zip -j "${base_filename}-dictd.zip" "${base_filename}-dictd.dict.dz" "${base_filename}-dictd.index"
+
+            rm -f *.dict.dz *.index
+            rm -f *.dict *.idx *.ifo *.syn
 
             for file in "${base_filename}"* "_${base_filename}"*; do
               if [[ -f "$file" ]]; then
