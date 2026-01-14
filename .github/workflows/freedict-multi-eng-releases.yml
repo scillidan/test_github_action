@@ -289,22 +289,18 @@ jobs:
             pyglossary "_${base_filename}-formatted.txt" "${base_filename}-aard2.slob" --read-format=Tabfile --write-format=Aard2Slob --name="FreeDict-$lang_pair"
 
             # ZIP stardict
-            for base in *-stardict.ifo; do
+            for base in *.ifo; do
                 prefix="${base%.ifo}"
-                zip -j "${prefix}.zip" "$prefix.ifo" "$prefix.dict" "$prefix.idx" 2>/dev/null && rm "$prefix.ifo" "$prefix.dict" "$prefix.idx"
-            done
-
-            # ZIP sdcv
-            for base in *-sdcv.ifo; do
-                prefix="${base%.ifo}"
-                zip -j "${prefix}.zip" "$prefix.dict" "$prefix.idx" "$prefix.ifo" "$prefix.syn" 2>/dev/null
+                zip -j "${prefix}.zip" "$prefix".{ifo,dict,idx,syn} 2>/dev/null
             done
 
             # ZIP dictd
-            zip -j "${base_filename}-dictd.zip" "${base_filename}-dictd.dict.dz" "${base_filename}-dictd.index"
+            for base in *.index; do
+              prefix="${base%.index}"
+              zip -j "${prefix}.zip" "$prefix".{index,dict.dz} 2>/dev/null
+            done
 
-            rm -f *.dict.dz *.index
-            rm -f *.dict *.idx *.ifo *.syn
+            rm -f *.{ifo,dict,idx,syn,index,dict.dz}
 
             for file in "${base_filename}"* "_${base_filename}"*; do
               if [[ -f "$file" ]]; then
@@ -377,14 +373,13 @@ jobs:
           mkdir -p _collect
           cp _convert/* _collect/ 2>/dev/null || true
           cd _collect
-          zip -j all-stardict.zip *-stardict.zip
-          zip -j all-sdcv.zip *-sdcv.zip
-          zip -j all-dictd.zip *-dictd.zip
-          zip -j all-yomichan.zip *-yomichan.zip
-          zip -j all-aard2.zip *.slob
-          zip -j _all-formatted-txt.zip _*-formatted.txt
-          zip -j _all-formatted-html2ansi-txt.zip _*-formatted-html2ansi.txt
-          rm -f *-stardict.zip *-sdcv.zip *-dictd.zip *-yomichan.zip *.slob _*-formatted*.txt
+          zip -j all-stardict.zip *-stardict.zip && rm -f *-stardict.zip
+          zip -j all-sdcv.zip *-sdcv.zip && rm -f *-sdcv.zip
+          zip -j all-dictd.zip *-dictd.zip && rm -f *-dictd.zip
+          zip -j all-yomichan.zip *-yomichan.zip && rm -f *-yomichan.zip
+          zip -j all-aard2.zip *.slob && rm -f *.slob
+          zip -j _all-formatted-txt.zip _*-formatted.txt && rm -f _*-formatted.txt
+          zip -j _all-formatted-html2ansi-txt.zip _*-formatted-html2ansi.txt && rm -f _*-formatted-html2ansi.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -392,7 +387,6 @@ jobs:
           tag_name: ${{ steps.date.outputs.RELEASE_DATE }}
           name: FreeDict *-eng released ${{ steps.date.outputs.RELEASE_DATE }}
           files: |
-            _convert/*.zip
-            _convert/*.slob
+            _convert/*.{zip,slob}
             _collect/*.zip
           overwrite_files: true
