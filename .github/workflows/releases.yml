@@ -47,16 +47,12 @@ jobs:
       - name: Convert HTML to Markdown
         run: |
           mkdir -p _markdown
-          mkdir -p _markdown/contribs
-          mkdir -p _markdown/html
-          mkdir -p _markdown/model
 
-          for dir in "" "contribs/" "html/" "model/"; do
-            find "_html/$dir" -name "*.html" | while read html_file; do
-              base_name=$(basename "$html_file" .html)
-              output_file="_markdown/$dir${base_name}.md"
-              $(go env GOPATH)/bin/html2markdown --input "$html_file" --output "$output_file"
-            done
+          find _html -type f -name "*.html" | while read html_file; do
+            relative_path="${html_file#_html/}"
+            md_file="_markdown/${relative_path%.html}.md"
+            mkdir -p "$(dirname "$md_file")"
+            $(go env GOPATH)/bin/html2markdown --input "$html_file" --output "$md_file"
           done
 
       - name: ZIP html
