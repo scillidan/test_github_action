@@ -2,10 +2,9 @@ name: Create Releases
 
 on:
   schedule:
-    # Run on the 1st of every month at 00:00 UTC
+    # 1st of every month at 00:00 UTC
     - cron: '0 0 1 * *'
   workflow_dispatch:
-    # Allow manual trigger
 
 jobs:
   generate-docs:
@@ -57,10 +56,10 @@ jobs:
   
           for dir in "" "contribs" "html" "model"; do
             if [ -z "$dir" ]; then
-              input_pattern="target/doc/_markdown/*.html"
+              input_pattern="target/doc/*.html"
               output_dir="_markdown"
             else
-              input_pattern="target/doc/_markdown/$dir/*.html"
+              input_pattern="target/doc/$dir/*.html"
               output_dir="_markdown/$dir"
             fi
   
@@ -76,22 +75,36 @@ jobs:
         run: |
           WORKSPACE_ROOT="${{ github.workspace }}"
   
-          cd "$WORKSPACE_ROOT/typst/docs/_markdown"
-          zip -r "$WORKSPACE_ROOT/_markdown_${{ steps.run_date.outputs.release_date_nodash }}.zip" .
+          if [ -d "$WORKSPACE_ROOT/typst/docs/_markdown" ]; then
+            cd "$WORKSPACE_ROOT/typst/docs/_markdown"
+            zip -r "$WORKSPACE_ROOT/_markdown_${{ steps.run_date.outputs.release_date_nodash }}.zip" .
+            echo "Created Markdown ZIP"
+          else
+            echo "Warning: _markdown directory not found"
+          fi
   
-          cd "$WORKSPACE_ROOT/typst/docs/target/doc/_markdown"
-          zip -r "$WORKSPACE_ROOT/typst-docs-html-${{ steps.run_date.outputs.release_date_nodash }}.zip" .
-  
-          rm -rf "$WORKSPACE_ROOT/typst/docs/_markdown"
+          if [ -d "$WORKSPACE_ROOT/typst/docs/target/doc" ]; then
+            cd "$WORKSPACE_ROOT/typst/docs/target/doc"
+            zip -r "$WORKSPACE_ROOT/typst-docs-html-${{ steps.run_date.outputs.release_date_nodash }}.zip" .
+            echo "Created HTML ZIP"
+          else
+            echo "Warning: target/doc directory not found"
+          fi
+
+          if [ -d "$WORKSPACE_ROOT/typst/docs/_markdown" ]; then
+            rm -rf "$WORKSPACE_ROOT/typst/docs/_markdown"
+          fi
   
           echo "Generated files:"
-          ls -la "$WORKSPACE_ROOT/"*${{ steps.run_date.outputs.release_date_nodash }}.zip
+          ls -la "$WORKSPACE_ROOT/"*${{ steps.run_date.outputs.release_date_nodash }}.zip 2>/dev/null || true
   
       - name: Generate SHA256 checksums
-        if: steps.check_new_release.outputs.should_continue == 'true'
         run: |
+          cd "${{ github.workspace }}"
           for file in *.zip; do
-            sha256sum "$file" > "$file.sha256";
+            if [ -f "$file" ]; then
+              sha256sum "$file" > "$file.sha256";
+            fi
           done
 
       - name: Create GitHub Release and upload files
