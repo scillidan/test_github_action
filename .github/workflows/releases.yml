@@ -58,12 +58,12 @@ jobs:
       - name: ZIP html
         run: |
           cd _html
-          zip -j ../typst-docs-${{ steps.run_date.outputs.release_date_nodash }}-html.zip .
-
+          zip -r ../typst-docs-${{ steps.run_date.outputs.release_date_nodash }}-html.zip .
+          
       - name: ZIP markdown
         run: |
           cd _markdown
-          zip -j ../typst-docs-${{ steps.run_date.outputs.release_date_nodash }}-markdown.zip .
+          zip -r ../typst-docs-${{ steps.run_date.outputs.release_date_nodash }}-markdown.zip .
 
       - name: Generate SHA256 checksums
         run: |
