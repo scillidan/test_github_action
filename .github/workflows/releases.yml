@@ -16,109 +16,67 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          repository: typst/typst
-          depth: 1
-          path: typst
-    
-      # Set up Go environment
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.21'  # Use newer Go version
-    
-      # Install html-to-markdown tool
-      - name: Install html2markdown
-        run: go install github.com/JohannesKaufmann/html-to-markdown/v2/cli/html2markdown@latest
-    
+
       - name: Set date as release tag
         id: run_date
         run: |
           echo "release_tag=$(date -u +%F)" >> $GITHUB_OUTPUT
           echo "release_date_nodash=$(date -u +%Y%m%d)" >> $GITHUB_OUTPUT
-    
-      - name: Generate documentation
-        working-directory: ./typst/docs
-        run: cargo doc
-    
-      - name: Convert HTML to Markdown
-        working-directory: ./typst/docs
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Install html2markdown
         run: |
-          # Copy files from typst_docs directory to target/doc root
-          cp -r "${{ github.workspace }}/typst/target/doc/typst_docs/"* "${{ github.workspace }}/typst/target/doc/"
-    
-          # Create output directory structure
+          go install github.com/JohannesKaufmann/html-to-markdown/v2/cli/html2markdown@latest
+          $(go env GOPATH)/bin/html2markdown --version
+
+      - name: Generate documentation
+        run: |
+          git clone --depth=1 https://github.com/typst/typst
+          cd typst/docs
+          cargo doc
+
+      - name: Copy documentation to root
+        run: |
+          mkdir _html
+          cp -r typst/target/doc/typst_docs/* _html/
+
+      - name: Convert HTML to Markdown
+        run: |
           mkdir -p _markdown
           mkdir -p _markdown/contribs
           mkdir -p _markdown/html
           mkdir -p _markdown/model
-    
-          # Get html2markdown tool path
-          HTML2MARKDOWN="$HOME/go/bin/html2markdown"
-    
-          # Process HTML files in root and subdirectories
-          for dir in "" "contribs" "html" "model"; do
-            if [ -z "$dir" ]; then
-              input_pattern="target/doc/*.html"
-              output_dir="_markdown"
-            else
-              input_pattern="target/doc/$dir/*.html"
-              output_dir="_markdown/$dir"
-            fi
-    
-            # Iterate through each HTML file and convert
-            for html_file in $input_pattern; do
-              if [ -f "$html_file" ]; then
-                filename=$(basename "$html_file" .html)
-                $HTML2MARKDOWN --input "$html_file" --output "$output_dir/$filename.md"
-              fi
+
+          for dir in "" "contribs/" "html/" "model/"; do
+            find "_html/$dir" -name "*.html" | while read html_file; do
+              base_name=$(basename "$html_file" .html)
+              output_file="_markdown/$dir${base_name}.md"
+              $(go env GOPATH)/bin/html2markdown --input "$html_file" --output "$output_file"
             done
           done
-    
-      - name: Create ZIP archive
+
+      - name: ZIP html
         run: |
-          WORKSPACE_ROOT="${{ github.workspace }}"
-    
-          echo "Current directory: $(pwd)"
-          echo "Looking for target/doc..."
-          find "$WORKSPACE_ROOT" -name "doc" -type d | grep target/doc
-    
-          MARKDOWN_DIR="$WORKSPACE_ROOT/typst/docs/_markdown"
-          if [ -d "$MARKDOWN_DIR" ]; then
-            echo "Creating markdown archive..."
-            cd "$MARKDOWN_DIR"
-            zip -r "$WORKSPACE_ROOT/_markdown_${{ steps.run_date.outputs.release_date_nodash }}.zip" .
-          else
-            echo "ERROR: Markdown directory not found at $MARKDOWN_DIR"
-          fi
-    
-          HTML_SOURCE="$WORKSPACE_ROOT/typst/target/doc"
-          if [ ! -d "$HTML_SOURCE" ]; then
-            HTML_SOURCE="$WORKSPACE_ROOT/typst/docs/target/doc"
-          fi
-    
-          if [ -d "$HTML_SOURCE" ]; then
-            echo "Creating HTML archive from $HTML_SOURCE..."
-            cd "$HTML_SOURCE"
-            zip -r "$WORKSPACE_ROOT/typst-docs-html-${{ steps.run_date.outputs.release_date_nodash }}.zip" .
-          else
-            echo "ERROR: HTML source directory not found"
-            echo "Checked: $WORKSPACE_ROOT/typst/target/doc"
-            echo "Checked: $WORKSPACE_ROOT/typst/docs/target/doc"
-          fi
-    
-          echo "Generated files:"
-          ls -la "$WORKSPACE_ROOT"/*.zip 2>/dev/null || echo "No zip files generated"
-    
+          cd _html
+          zip -j ../typst-docs-${{ steps.run_date.outputs.release_date_nodash }}-html.zip .
+
+      - name: ZIP markdown
+        run: |
+          cd _markdown
+          zip -j ../typst-docs-${{ steps.run_date.outputs.release_date_nodash }}-markdown.zip .
+
       - name: Generate SHA256 checksums
         run: |
-          cd "${{ github.workspace }}"
           for file in *.zip; do
             if [ -f "$file" ]; then
               sha256sum "$file" > "$file.sha256";
             fi
           done
-    
+
       - name: Create GitHub Release and upload files
         uses: softprops/action-gh-release@v2
         with:
