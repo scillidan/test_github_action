@@ -50,6 +50,8 @@ jobs:
       - name: Convert HTML to Markdown
         working-directory: ./typst/docs
         run: |
+          cp -r "${{ github.workspace }}/typst/target/doc/typst_docs/"* "${{ github.workspace }}/typst/target/doc/"
+
           mkdir -p _markdown
           mkdir -p _markdown/contribs
           mkdir -p _markdown/html
@@ -73,33 +75,41 @@ jobs:
               fi
             done
           done
-  
+
       - name: Create ZIP archive
         run: |
           WORKSPACE_ROOT="${{ github.workspace }}"
-  
-          if [ -d "$WORKSPACE_ROOT/typst/docs/_markdown" ]; then
-            cd "$WORKSPACE_ROOT/typst/docs/_markdown"
+
+          echo "Current directory: $(pwd)"
+          echo "Looking for target/doc..."
+          find "$WORKSPACE_ROOT" -name "doc" -type d | grep target/doc
+
+          MARKDOWN_DIR="$WORKSPACE_ROOT/typst/docs/_markdown"
+          if [ -d "$MARKDOWN_DIR" ]; then
+            echo "Creating markdown archive..."
+            cd "$MARKDOWN_DIR"
             zip -r "$WORKSPACE_ROOT/_markdown_${{ steps.run_date.outputs.release_date_nodash }}.zip" .
-            echo "Created Markdown ZIP"
           else
-            echo "Warning: _markdown directory not found"
-          fi
-  
-          if [ -d "$WORKSPACE_ROOT/typst/docs/target/doc" ]; then
-            cd "$WORKSPACE_ROOT/typst/docs/target/doc"
-            zip -r "$WORKSPACE_ROOT/typst-docs-html-${{ steps.run_date.outputs.release_date_nodash }}.zip" .
-            echo "Created HTML ZIP"
-          else
-            echo "Warning: target/doc directory not found"
+            echo "ERROR: Markdown directory not found at $MARKDOWN_DIR"
           fi
 
-          if [ -d "$WORKSPACE_ROOT/typst/docs/_markdown" ]; then
-            rm -rf "$WORKSPACE_ROOT/typst/docs/_markdown"
+          HTML_SOURCE="$WORKSPACE_ROOT/typst/target/doc"
+          if [ ! -d "$HTML_SOURCE" ]; then
+            HTML_SOURCE="$WORKSPACE_ROOT/typst/docs/target/doc"
           fi
-  
+
+          if [ -d "$HTML_SOURCE" ]; then
+            echo "Creating HTML archive from $HTML_SOURCE..."
+            cd "$HTML_SOURCE"
+            zip -r "$WORKSPACE_ROOT/typst-docs-html-${{ steps.run_date.outputs.release_date_nodash }}.zip" .
+          else
+            echo "ERROR: HTML source directory not found"
+            echo "Checked: $WORKSPACE_ROOT/typst/target/doc"
+            echo "Checked: $WORKSPACE_ROOT/typst/docs/target/doc"
+          fi
+
           echo "Generated files:"
-          ls -la "$WORKSPACE_ROOT/"*${{ steps.run_date.outputs.release_date_nodash }}.zip 2>/dev/null || true
+          ls -la "$WORKSPACE_ROOT"/*.zip 2>/dev/null || echo "No zip files generated"
   
       - name: Generate SHA256 checksums
         run: |
