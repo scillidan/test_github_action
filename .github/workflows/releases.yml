@@ -99,4 +99,5 @@ jobs:
         with:
           tag_name: ${{ steps.run_date.outputs.release_date_nodash }}
           name: "${{ steps.run_date.outputs.release_date_nodash }}"
-          files: *.zip
+          files: |
+            *.zip
