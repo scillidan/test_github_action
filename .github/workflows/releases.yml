@@ -1,0 +1,102 @@
+name: Create Releases
+
+on:
+  schedule:
+    # Run on the 1st of every month at 00:00 UTC
+    - cron: '0 0 1 * *'
+  workflow_dispatch:
+    # Allow manual trigger
+
+jobs:
+  generate-docs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: typst/typst
+          depth: 1
+          path: typst
+
+      - name: Checkout Html2Markdown
+        uses: actions/checkout@v4
+        with:
+          repository: baynezy/Html2Markdown
+          path: Html2Markdown
+          depth: 1
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.x'
+
+      - name: Build Html2Markdown
+        working-directory: ./Html2Markdown
+        run: dotnet build -c Release
+
+      - name: Set date as release tag
+        id: run_date
+        run: |
+          echo "release_tag=$(date -u +%F)" >> $GITHUB_OUTPUT
+          echo "release_date_nodash=$(date -u +%Y%m%d)" >> $GITHUB_OUTPUT
+
+      - name: Generate documentation
+        working-directory: ./typst/docs
+        run: cargo doc
+
+    - name: Convert HTML to Markdown
+      working-directory: ./typst/docs
+      run: |
+        mkdir -p _markdown
+        mkdir -p _markdown/contribs
+        mkdir -p _markdown/html
+        mkdir -p _markdown/model
+
+        TOOL_PATH="${{ github.workspace }}/Html2Markdown/Html2Markdown/bin/Release/net8.0/Html2Markdown.dll"
+
+        for dir in "" "contribs" "html" "model"; do
+          if [ -z "$dir" ]; then
+            input_pattern="target/doc/_markdown/*.html"
+            output_dir="_markdown"
+          else
+            input_pattern="target/doc/_markdown/$dir/*.html"
+            output_dir="_markdown/$dir"
+          fi
+
+          for html_file in $input_pattern; do
+            if [ -f "$html_file" ]; then
+              filename=$(basename "$html_file" .html)
+              dotnet "$TOOL_PATH" --input "$html_file" --output "$output_dir/$filename.md"
+            fi
+          done
+        done
+
+    - name: Create ZIP archive
+      run: |
+        WORKSPACE_ROOT="${{ github.workspace }}"
+
+        cd "$WORKSPACE_ROOT/typst/docs/_markdown"
+        zip -r "$WORKSPACE_ROOT/_markdown_${{ steps.run_date.outputs.release_date_nodash }}.zip" .
+
+        cd "$WORKSPACE_ROOT/typst/docs/target/doc/_markdown"
+        zip -r "$WORKSPACE_ROOT/typst-docs-html-${{ steps.run_date.outputs.release_date_nodash }}.zip" .
+
+        rm -rf "$WORKSPACE_ROOT/typst/docs/_markdown"
+
+        echo "Generated files:"
+        ls -la "$WORKSPACE_ROOT/"*${{ steps.run_date.outputs.release_date_nodash }}.zip
+
+      - name: Generate SHA256 checksums
+        if: steps.check_new_release.outputs.should_continue == 'true'
+        run: |
+          for file in *.zip; do
+            sha256sum "$file" > "$file.sha256";
+          done
+
+      - name: Create GitHub Release and upload files
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.run_date.outputs.release_date_nodash }}
+          name: "${{ steps.run_date.outputs.release_date_nodash }}"
+          files: *.zip
