@@ -34,6 +34,24 @@ shutil.copy2('assets/icon.png', docset_name + '/icon.png')
 shutil.copy2('assets/icon@2x.png', docset_name + '/icon@2x.png')
 print("Copied icon.png and icon@2x.png from assets/")
 
+def get_version():
+    version_url = 'https://www.crummy.com/software/BeautifulSoup/'
+    data = str(requests.get(version_url).text).strip()
+    soup = bs(data, features='html.parser')
+
+    version_paragraph = None
+    for p in soup.find_all('p'):
+        if 'The current release is' in p.get_text():
+            version_paragraph = p
+            break
+
+    if version_paragraph:
+        version_match = re.search(r'Beautiful Soup\s+([\d.]+)', version_paragraph.get_text())
+        if version_match:
+            return version_match.group(1)
+    
+    return "4.x"
+
 def update_db(name, path):
 
   typ = 'func'
@@ -185,13 +203,14 @@ def add_infoplist():
          "</plist>".format(CFBundleIdentifier, CFBundleName, DocSetPlatformFamily, 'crummy.com/bs4/index.html')
   open(docset_name + '/Contents/info.plist', 'wb').write(info.encode('utf-8'))
 
-def add_meta():
+def add_meta(version):
   meta_dict = {
     "extra": {
         "indexFilePath": "crummy.com/bs4/index.html" # using fake url to keep path as short as possible to avoid Windows OS bug
     },
     "name": "Beautiful Soup",
-    "title": "Beautiful Soup"
+    "title": "Beautiful Soup",
+    "version": version
   }
 
   with open(docset_name + '/meta.json','w+',encoding='utf-8') as fh:
@@ -213,6 +232,8 @@ except Exception as e:
 
 
 # start
+version = get_version()
+
 add_urls()
 
 add_infoplist()
