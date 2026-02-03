@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import shutil
+import sys
 from pathlib import Path
 from bs4 import BeautifulSoup
 
@@ -84,8 +85,8 @@ def create_sqlite_index(db_path: Path):
 
 def clean_name(name: str) -> str:
     """Clean up the name by removing unwanted prefixes."""
-    # Remove common prefixes like 'requests.', 'requests.api.', etc.
-    prefixes_to_remove = [
+    # Remove common prefixes
+    prefixes = [
         "requests.",
         "requests.api.",
         "requests.auth.",
@@ -99,11 +100,39 @@ def clean_name(name: str) -> str:
         "requests.utils.",
     ]
 
-    for prefix in prefixes_to_remove:
+    for prefix in prefixes:
         if name.startswith(prefix):
             name = name[len(prefix) :]
 
     return name
+
+
+def get_entry_type(classes_str: str) -> str | None:
+    """Determine entry type from class string."""
+    classes_lower = classes_str.lower()
+
+    if (
+        "sig-method" in classes_str
+        or "meth" in classes_lower
+        or "method" in classes_lower
+    ):
+        return "Method"
+    if (
+        "sig-function" in classes_str
+        or "func" in classes_lower
+        or "function" in classes_lower
+    ):
+        return "Function"
+    if "sig-class" in classes_str or "class" in classes_lower:
+        return "Class"
+    if (
+        "sig-attr" in classes_str
+        or "attr" in classes_lower
+        or "attribute" in classes_lower
+    ):
+        return "Attribute"
+
+    return None
 
 
 def extract_entries(html_file: Path) -> list:
@@ -112,52 +141,61 @@ def extract_entries(html_file: Path) -> list:
 
     try:
         html_content = html_file.read_text(encoding="utf-8")
-        soup = BeautifulSoup(html_content, "html.parser")
+        soup = BeautifulSoup(html_content, "lxml")
 
-        # Find all method/class/function definitions
-        # Look for dt elements with id attributes (Sphinx format)
-        for dt in soup.find_all("dt"):
-            elem_id = dt.get("id", "")
-            if not elem_id:
+        # Find all elements with id that starts with requests.
+        for elem in soup.find_all(id=True):
+            elem_id = elem.get("id", "")
+
+            # Only process requests-related IDs
+            if not elem_id.startswith("requests."):
                 continue
 
-            # Determine the type
-            if "class" in dt.attrs:
-                classes = dt.attrs["class"]
-                if "method" in classes:
-                    entry_type = "Method"
-                elif "class" in classes:
-                    entry_type = "Class"
-                elif "function" in classes:
-                    entry_type = "Function"
-                elif "attribute" in classes:
-                    entry_type = "Attribute"
-                else:
-                    continue
-            else:
+            # Get classes from element and its parent
+            classes_str = elem.get("class", "")
+            if isinstance(classes_str, list):
+                classes_str = " ".join(classes_str)
+
+            # Also check parent for type hints
+            parent = elem.parent
+            if parent:
+                parent_classes = parent.get("class", "")
+                if isinstance(parent_classes, list):
+                    parent_classes = " ".join(parent_classes)
+                classes_str = classes_str + " " + parent_classes
+
+            entry_type = get_entry_type(classes_str)
+
+            if not entry_type:
+                # Try to infer from element name
+                if elem.name in ["dt", "th"]:
+                    entry_type = get_entry_type(classes_str)
+
+            if not entry_type:
                 continue
 
-            # Get the name - clean up the ID
+            # Get the name - extract just the last part
             name = elem_id.split(".")[-1]
             name = clean_name(name)
 
-            # Get the description from the next dd
-            dd = dt.find_next_sibling("dd")
-            desc = ""
-            if dd:
-                desc = dd.get_text(strip=True)[:200]
+            if not name:
+                continue
 
-            # Create the entry
             entry = {
                 "name": name,
                 "type": entry_type,
                 "path": html_file.name + "#" + elem_id,
-                "desc": desc,
             }
             entries.append(entry)
 
+        # Debug: print sample
+        if entries:
+            print(f"  Found {len(entries)} entries in {html_file.name}")
+            for e in entries[:3]:
+                print(f"    - {e['name']} ({e['type']})")
+
     except Exception as e:
-        print(f"Error processing {html_file}: {e}")
+        print(f"Error processing {html_file}: {e}", file=sys.stderr)
 
     return entries
 
@@ -198,7 +236,10 @@ def generate_docset(
     cursor = conn.cursor()
 
     all_entries = []
-    for html_file in html_dir.glob("*.html"):
+    html_files = list(html_dir.glob("*.html"))
+    print(f"Processing {len(html_files)} HTML files...")
+
+    for html_file in html_files:
         entries = extract_entries(html_file)
         all_entries.extend(entries)
 
@@ -214,14 +255,33 @@ def generate_docset(
 
     print(f"Generated {len(all_entries)} entries in docset")
 
-    # Create tgz archive
-    import tarfile
-
+    # Create tgz archive using subprocess tar
     tgz_path = Path.cwd() / f"{docset_name}.tgz"
-    with tarfile.open(tgz_path, "w:gz") as tar:
-        tar.add(
-            docset_path, arcname=docset_name, exclude=lambda x: x.name == ".DS_Store"
-        )
+
+    # Use tar command directly to avoid Python tarfile issues
+    import subprocess
+
+    docset_parent = docset_path.parent
+    docset_relative = docset_path.name
+
+    result = subprocess.run(
+        ["tar", "-czf", str(tgz_path), "-C", str(docset_parent), docset_relative],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        print(f"Error creating tar: {result.stderr}", file=sys.stderr)
+        # Fallback to Python tarfile
+        import tarfile
+
+        with tarfile.open(tgz_path, "w:gz") as tar:
+            for root, dirs, files in os.walk(docset_path):
+                for file in files:
+                    if file != ".DS_Store":
+                        file_path = Path(root) / file
+                        arc_path = file_path.relative_to(docset_path.parent)
+                        tar.add(file_path, arcname=str(arc_path))
 
     print(f"Created {tgz_path}")
 
