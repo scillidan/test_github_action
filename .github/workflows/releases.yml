@@ -96,7 +96,7 @@ jobs:
         echo '<?xml version="1.0" encoding="UTF-8"?>' > Requests.xml
         echo '<xml>' >> Requests.xml
         echo '  <entry>' >> Requests.xml
-        echo '    <name>Beautiful Soup 4</name>' >> Requests.xml
+        echo '    <name>Requests</name>' >> Requests.xml
         echo "    <version>$version</version>" >> Requests.xml
         echo "    <url>https://github.com/${{ github.repository }}/releases/download/$version/Requests.docset.tgz</url>" >> Requests.xml
         echo '  </entry>' >> Requests.xml
