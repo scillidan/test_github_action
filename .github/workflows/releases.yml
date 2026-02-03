@@ -51,7 +51,7 @@ jobs:
 
     - name: Install dependencies
       if: ${{ steps.check_version.outputs.should_release == 'true' }}
-      run: pip install doc2dash
+      run: pip install doc2dash sphinx
 
     - name: Download and build documentation
       if: ${{ steps.check_version.outputs.should_release == 'true' }}
