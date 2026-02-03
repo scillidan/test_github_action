@@ -113,13 +113,16 @@ jobs:
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
 
-        if [ -f Requests.xml ]; then
+        # Check if file is tracked by git
+        if git ls-files --error-unmatch Requests.xml >/dev/null 2>&1; then
+          # File is tracked - check if there are changes
           if git diff --quiet Requests.xml; then
             echo "No changes to Requests.xml, skipping commit."
             exit 0
           fi
         fi
 
+        # Either file is new or has changes - add and commit
         git add Requests.xml
-        git commit -m "doc: update Requests.xml for release ${{ steps.get_version.outputs.version }}"
+        git commit -m "doc: update Requests.xml for release ${{ steps.get_version.outputs.version }}" || true
         git push
