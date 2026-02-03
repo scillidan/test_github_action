@@ -1,10 +1,9 @@
 name: Create Releases
 
 on:
-  schedule:
-    # 00:00 on the 1st of every month (UTC)
-    - cron: '0 0 1 * *'
   workflow_dispatch:
+  schedule:
+    - cron: '0 0 1 * *'
 
 permissions:
   contents: write
@@ -21,30 +20,26 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Get latest BS4 version
+    - name: Get latest Requests version
       id: get_version
       run: |
-        version=$(curl -s "https://www.crummy.com/software/BeautifulSoup/bs4/doc/" | \
-          grep -oP 'Beautiful Soup version \K[0-9.]+' | head -1 | sed 's/\.$//')
+        version=$(curl -s "https://api.github.com/repos/psf/requests/releases/latest" | python3 -c "import sys, json; print(json.load(sys.stdin)['tag_name'].lstrip('v'))")
         echo "version=$version" >> $GITHUB_OUTPUT
-        echo "Latest BS4 version: $version"
 
     - name: Check if version tag already exists
       id: check_version
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        VERSION: ${{ steps.get_version.outputs.version }}
       run: |
-        version="${{ steps.get_version.outputs.version }}"
-        # Check if tag exists in repo
-        if gh api repos/{owner}/{repo}/git/refs/tags/$version > /dev/null 2>&1; then
-          echo "Version $version already exists, skipping release"
+        version="$VERSION"
+        status=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $GH_TOKEN" \
+          "https://api.github.com/repos/psf/requests/releases/tags/v${version}")
+        if [ "$status" = "200" ]; then
           echo "should_release=false" >> $GITHUB_OUTPUT
-          echo "exit_status=skipped" >> $GITHUB_OUTPUT
-          exit 0
+          echo "Release $version already exists, skipping..."
         else
-          echo "Version $version is new, proceeding with release"
           echo "should_release=true" >> $GITHUB_OUTPUT
-          echo "exit_status=continue" >> $GITHUB_OUTPUT
         fi
 
     - name: Set up Python
@@ -55,16 +50,26 @@ jobs:
 
     - name: Install dependencies
       if: ${{ steps.check_version.outputs.should_release == 'true' }}
-      run: pip install bs4 requests
+      run: pip install doc2dash
 
-    - name: Run bs4-to-dash.py
+    - name: Download and build documentation
       if: ${{ steps.check_version.outputs.should_release == 'true' }}
-      run: python bs4-to-dash.py
+      env:
+        VERSION: ${{ steps.get_version.outputs.version }}
+      run: |
+        version="$VERSION"
+        curl -L -o source.zip "https://github.com/psf/requests/archive/refs/tags/v${version}.zip"
+        unzip -q source.zip
+        cd requests-$version/docs
+        make html
+        cd ../..
+        mv requests-$version/docs/_build/html _html
+        doc2dash --name "Requests" --icon assets/icon.png --icon-2x assets/icon@2x.png -f -I index.html -v _html
 
     - name: Create tgz
       if: ${{ steps.check_version.outputs.should_release == 'true' }}
       run: |
-        basename="Beautiful_Soup_4.docset"
+        basename="Requests.docset"
         tar --exclude='.DS_Store' -czf "$basename.tgz" "$basename"
         rm -rf "$basename"
 
@@ -88,14 +93,14 @@ jobs:
       if: ${{ steps.check_version.outputs.should_release == 'true' }}
       run: |
         version="${{ steps.get_version.outputs.version }}"
-        echo '<?xml version="1.0" encoding="UTF-8"?>' > Beautiful_Soup_4.xml
-        echo '<xml>' >> Beautiful_Soup_4.xml
-        echo '  <entry>' >> Beautiful_Soup_4.xml
-        echo '    <name>Beautiful Soup 4</name>' >> Beautiful_Soup_4.xml
-        echo "    <version>$version</version>" >> Beautiful_Soup_4.xml
-        echo "    <url>https://github.com/${{ github.repository }}/releases/download/$version/Beautiful_Soup_4.docset.tgz</url>" >> Beautiful_Soup_4.xml
-        echo '  </entry>' >> Beautiful_Soup_4.xml
-        echo '</xml>' >> Beautiful_Soup_4.xml
+        echo '<?xml version="1.0" encoding="UTF-8"?>' > Requests.xml
+        echo '<xml>' >> Requests.xml
+        echo '  <entry>' >> Requests.xml
+        echo '    <name>Beautiful Soup 4</name>' >> Requests.xml
+        echo "    <version>$version</version>" >> Requests.xml
+        echo "    <url>https://github.com/${{ github.repository }}/releases/download/$version/Requests.docset.tgz</url>" >> Requests.xml
+        echo '  </entry>' >> Requests.xml
+        echo '</xml>' >> Requests.xml
 
     - name: Commit and push XML
       if: ${{ steps.check_version.outputs.should_release == 'true' }}
@@ -104,6 +109,10 @@ jobs:
       run: |
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
-        git add Beautiful_Soup_4.xml
-        git commit -m "doc: update Beautiful_Soup_4.xml for release ${{ steps.get_version.outputs.version }}"
+        if git diff --quiet && git diff --cached --quiet; then
+          echo "No changes to commit. This is normal when version hasn't changed."
+          exit 0
+        fi
+        git add Requests.xml
+        git commit -m "doc: update Requests.xml for release ${{ steps.get_version.outputs.version }}"
         git push
