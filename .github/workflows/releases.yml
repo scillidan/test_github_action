@@ -25,7 +25,7 @@ jobs:
       id: get_version
       run: |
         version=$(curl -s "https://www.crummy.com/software/BeautifulSoup/bs4/doc/" | \
-          grep -oP 'Beautiful Soup version \K[\d.]+' | head -1)
+          grep -oP 'Beautiful Soup version \K[0-9.]+' | head -1 | sed 's/\.$//')
         echo "version=$version" >> $GITHUB_OUTPUT
         echo "Latest BS4 version: $version"
 
@@ -83,7 +83,6 @@ jobs:
         name: "${{ steps.get_version.outputs.version }}"
         files: |
           *.tgz
-          *.sha256
 
     - name: Create or update XML files
       if: ${{ steps.check_version.outputs.should_release == 'true' }}
