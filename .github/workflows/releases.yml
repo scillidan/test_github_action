@@ -1,0 +1,110 @@
+name: Create Releases
+
+on:
+  schedule:
+    # 00:00 on the 1st of every month (UTC)
+    - cron: '0 0 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    outputs:
+      latest_version: ${{ steps.get_version.outputs.version }}
+      should_release: ${{ steps.check_version.outputs.should_release }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Get latest BS4 version
+      id: get_version
+      run: |
+        version=$(curl -s "https://www.crummy.com/software/BeautifulSoup/bs4/doc/" | \
+          grep -oP 'Beautiful Soup version \K[\d.]+' | head -1)
+        echo "version=$version" >> $GITHUB_OUTPUT
+        echo "Latest BS4 version: $version"
+
+    - name: Check if version tag already exists
+      id: check_version
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        version="${{ steps.get_version.outputs.version }}"
+        # Check if tag exists in repo
+        if gh api repos/{owner}/{repo}/git/refs/tags/$version > /dev/null 2>&1; then
+          echo "Version $version already exists, skipping release"
+          echo "should_release=false" >> $GITHUB_OUTPUT
+          echo "exit_status=skipped" >> $GITHUB_OUTPUT
+          exit 0
+        else
+          echo "Version $version is new, proceeding with release"
+          echo "should_release=true" >> $GITHUB_OUTPUT
+          echo "exit_status=continue" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Set up Python
+      if: ${{ steps.check_version.outputs.should_release == 'true' }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install dependencies
+      if: ${{ steps.check_version.outputs.should_release == 'true' }}
+      run: pip install bs4 requests
+
+    - name: Run bs4-to-dash.py
+      if: ${{ steps.check_version.outputs.should_release == 'true' }}
+      run: python bs4-to-dash.py
+
+    - name: Create tgz
+      if: ${{ steps.check_version.outputs.should_release == 'true' }}
+      run: |
+        basename="Beautiful_Soup_4.docset"
+        tar --exclude='.DS_Store' -czf "$basename.tgz" "$basename"
+        rm -rf "$basename"
+
+    - name: Generate SHA256 checksums
+      if: ${{ steps.check_version.outputs.should_release == 'true' }}
+      run: |
+        for file in *.tgz; do
+          sha256sum "$file" > "$file.sha256";
+        done
+
+    - name: Create GitHub Release and upload files
+      if: ${{ steps.check_version.outputs.should_release == 'true' }}
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.get_version.outputs.version }}
+        name: "${{ steps.get_version.outputs.version }}"
+        files: |
+          *.tgz
+          *.sha256
+
+    - name: Create or update XML files
+      if: ${{ steps.check_version.outputs.should_release == 'true' }}
+      run: |
+        version="${{ steps.get_version.outputs.version }}"
+        echo '<?xml version="1.0" encoding="UTF-8"?>' > Beautiful_Soup_4.xml
+        echo '<xml>' >> Beautiful_Soup_4.xml
+        echo '  <entry>' >> Beautiful_Soup_4.xml
+        echo '    <name>Beautiful Soup 4</name>' >> Beautiful_Soup_4.xml
+        echo "    <version>$version</version>" >> Beautiful_Soup_4.xml
+        echo "    <url>https://github.com/${{ github.repository }}/releases/download/$version/Beautiful_Soup_4.docset.tgz</url>" >> Beautiful_Soup_4.xml
+        echo '  </entry>' >> Beautiful_Soup_4.xml
+        echo '</xml>' >> Beautiful_Soup_4.xml
+
+    - name: Commit and push XML
+      if: ${{ steps.check_version.outputs.should_release == 'true' }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        git add Beautiful_Soup_4.xml
+        git commit -m "doc: update Beautiful_Soup_4.xml for release ${{ steps.get_version.outputs.version }}"
+        git push
